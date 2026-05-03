@@ -544,18 +544,106 @@ async def get_ticker_info(
 # ===========================
 
 def _resolve_corporate_number(identifier: str) -> str:
-    """銘柄コードまたは法人番号を法人番号に正規化する。"""
-    # 4桁の銘柄コードの場合、.T付与して法人番号に変換
+    """
+    銘柄コードまたは法人番号を法人番号に正規化する。
+
+    解決順序:
+    1. 静的マッピング（TICKER_TO_CORPORATE_NUMBER）
+    2. 動的解決: J-Quants銘柄名 → gBizINFO検索 → 法人番号（結果キャッシュ）
+    3. フォールバック: そのまま返す
+    """
+    # 4桁の銘柄コードの場合
     if len(identifier) == 4 and identifier.isdigit():
         ticker = f"{identifier}.T"
         if ticker in TICKER_TO_CORPORATE_NUMBER:
             return TICKER_TO_CORPORATE_NUMBER[ticker]
+        # 動的解決を試みる
+        resolved = _dynamic_resolve(identifier, ticker)
+        if resolved:
+            return resolved
     # .T付きティッカーの場合
     if identifier.endswith('.T'):
         if identifier in TICKER_TO_CORPORATE_NUMBER:
             return TICKER_TO_CORPORATE_NUMBER[identifier]
+        code = identifier.replace('.T', '')
+        resolved = _dynamic_resolve(code, identifier)
+        if resolved:
+            return resolved
     # そのまま法人番号として扱う
     return identifier
+
+
+# 動的解決キャッシュ
+_dynamic_corp_cache: dict = {}
+
+
+def _dynamic_resolve(code: str, ticker: str):
+    """
+    J-Quantsで銘柄名を取得 → gBizINFOで法人番号を検索。
+    結果をキャッシュしてTICKER_TO_CORPORATE_NUMBERに追加。
+    """
+    if ticker in _dynamic_corp_cache:
+        return _dynamic_corp_cache[ticker]
+
+    try:
+        # Step 1: ticker_resolverから会社名を取得
+        company_name = resolve_name(ticker)
+        if not company_name or company_name == ticker:
+            # J-Quants銘柄マスタから取得を試みる
+            stocks = jquants.get_listed_stocks()
+            for s in stocks:
+                if s.get("code", "").startswith(code):
+                    company_name = s.get("name", "")
+                    break
+
+        if not company_name or company_name == ticker:
+            return None
+
+        # Step 2: gBizINFOで企業名検索
+        # 「株式会社」等を除去して検索精度を上げる
+        search_name = (company_name
+                       .replace("株式会社", "")
+                       .replace("(株)", "")
+                       .replace("（株）", "")
+                       .strip())
+        search_result = gbizinfo.search_companies(name=search_name, page=1)
+
+        companies = []
+        if isinstance(search_result, dict):
+            companies = search_result.get("companies", [])
+        elif isinstance(search_result, list):
+            companies = search_result
+
+        # 閉鎖済み・組合・子会社を除外し、最も一致する企業を選択
+        best_match = None
+        for c in companies:
+            status = c.get("status", "")
+            if status == "閉鎖":
+                continue
+            cname = c.get("name", "")
+            # 労働組合・協同組合は除外
+            if "組合" in cname or "協会" in cname or "財団" in cname:
+                continue
+            # 完全一致を最優先
+            if search_name in cname and ("株式会社" in cname or "会社" in cname):
+                best_match = c
+                break
+            # 部分一致のフォールバック
+            if best_match is None:
+                best_match = c
+
+        if best_match:
+            corp_num = best_match.get("corporate_number", "")
+            if corp_num:
+                _dynamic_corp_cache[ticker] = corp_num
+                TICKER_TO_CORPORATE_NUMBER[ticker] = corp_num
+                print(f"[Resolver] Dynamic: {ticker} ({company_name}) → {corp_num} ({best_match.get('name', '')})")
+                return corp_num
+
+    except Exception as e:
+        print(f"[Resolver] Dynamic resolve failed for {ticker}: {e}")
+
+    return None
 
 
 @app.get("/api/v1/company/search", tags=["Company"])
