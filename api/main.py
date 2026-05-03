@@ -10,6 +10,11 @@ Japan Intelligence API — メインサーバー
   GET  /api/v1/holdings/{ticker}    - 特定銘柄の大量保有
   GET  /api/v1/macro                - マクロ指標
   GET  /api/v1/macro/events         - マクロ異常変動イベント
+  GET  /api/v1/company/{id}         - gBizINFO企業プロフィール
+  GET  /api/v1/company/{id}/subsidies    - 補助金履歴
+  GET  /api/v1/company/{id}/certifications - 認定情報
+  GET  /api/v1/company/{id}/patents  - 特許情報
+  GET  /api/v1/company/search        - 企業名検索
   POST /api/v1/interpret            - AI解釈（Layer 2）
   GET  /api/v1/ticker/{ticker}      - 銘柄情報
   GET  /api/v1/health               - ヘルスチェック
@@ -27,17 +32,19 @@ from fastapi import FastAPI, Query, Path, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from core.config import API_VERSION, API_TITLE, API_DESCRIPTION
+from core.config import API_VERSION, API_TITLE, API_DESCRIPTION, TICKER_TO_CORPORATE_NUMBER
 from core.ticker_resolver import resolve_name, resolve_names_batch
 from sources.tdnet import TDnetSource
 from sources.edinet import EDINETSource
 from sources.macro import MacroSource
+from sources.gbizinfo import GBizInfoSource
 from intelligence.interpreter import Interpreter
 
 # === データソース初期化 ===
 tdnet = TDnetSource()
 edinet = EDINETSource()
 macro = MacroSource()
+gbizinfo = GBizInfoSource()
 interpreter = Interpreter()
 
 
@@ -45,6 +52,7 @@ interpreter = Interpreter()
 TAGS = [
     {"name": "Disclosures", "description": "TDnet適時開示情報 — 業績修正・M&A・自社株買い等の分類済みデータ"},
     {"name": "Holdings", "description": "EDINET大量保有報告書 — 機関投資家の持分変動追跡"},
+    {"name": "Company", "description": "gBizINFO企業情報 — 500万法人の補助金・認定・特許・財務・調達データ"},
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
     {"name": "Reference", "description": "銘柄情報・ヘルスチェック等のユーティリティ"},
@@ -239,12 +247,15 @@ async def health():
         "sources": {
             "tdnet": "available",
             "edinet": "available" if edinet.api_key else "no_api_key",
+            "gbizinfo": "available" if gbizinfo.api_token else "no_api_token",
             "macro": "available",
             "interpreter": "available" if interpreter.client else "no_api_key",
         },
         "endpoints": {
             "disclosures": "/api/v1/disclosures",
             "holdings": "/api/v1/holdings",
+            "company": "/api/v1/company/{corporate_number}",
+            "company_search": "/api/v1/company/search",
             "macro": "/api/v1/macro",
             "events": "/api/v1/macro/events",
             "interpret": "/api/v1/interpret",
@@ -510,6 +521,107 @@ async def get_ticker_info(
         'ticker': ticker,
         'company_name': resolve_name(ticker),
     })
+
+
+# ===========================
+#  gBizINFO 企業情報
+# ===========================
+
+def _resolve_corporate_number(identifier: str) -> str:
+    """銘柄コードまたは法人番号を法人番号に正規化する。"""
+    # 4桁の銘柄コードの場合、.T付与して法人番号に変換
+    if len(identifier) == 4 and identifier.isdigit():
+        ticker = f"{identifier}.T"
+        if ticker in TICKER_TO_CORPORATE_NUMBER:
+            return TICKER_TO_CORPORATE_NUMBER[ticker]
+    # .T付きティッカーの場合
+    if identifier.endswith('.T'):
+        if identifier in TICKER_TO_CORPORATE_NUMBER:
+            return TICKER_TO_CORPORATE_NUMBER[identifier]
+    # そのまま法人番号として扱う
+    return identifier
+
+
+@app.get("/api/v1/company/search", tags=["Company"])
+async def search_companies(
+    name: str = Query(description="企業名（部分一致検索）"),
+    page: int = Query(default=1, ge=1, description="ページ番号"),
+):
+    """
+    企業名で法人を検索する（gBizINFO 500万法人超）。
+
+    部分一致で検索し、法人番号・企業名・所在地を返す。
+    法人番号を使って `/company/{corporate_number}` で詳細取得可能。
+    """
+    result = gbizinfo.search_companies(name=name, page=page)
+    return _wrap_response("gbizinfo", result)
+
+
+@app.get("/api/v1/company/{identifier}", tags=["Company"])
+async def get_company_profile(
+    identifier: str = Path(description="法人番号（13桁）または銘柄コード（例: 7203, 7203.T）"),
+    full: bool = Query(default=False, description="全情報統合（補助金+認定+特許+財務+調達）"),
+):
+    """
+    企業プロフィールをgBizINFOから取得する。
+
+    銘柄コード（4桁 or .T付き）または法人番号（13桁）で指定可能。
+    `full=true` で補助金・認定・特許・財務・調達を統合した完全プロフィール。
+
+    **銘柄コード → 法人番号の自動変換**: 主要30銘柄は自動マッピング。
+    それ以外は法人番号を直接指定するか、`/company/search` で検索。
+    """
+    corp_num = _resolve_corporate_number(identifier)
+
+    if full:
+        result = gbizinfo.get_full_profile(corp_num)
+    else:
+        result = gbizinfo.get_company(corp_num)
+
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Company not found: {identifier}")
+
+    return _wrap_response("gbizinfo", result)
+
+
+@app.get("/api/v1/company/{identifier}/subsidies", tags=["Company"])
+async def get_company_subsidies(
+    identifier: str = Path(description="法人番号（13桁）または銘柄コード"),
+):
+    """企業の補助金受給履歴を取得。政府からの資金援助は成長投資のシグナル。"""
+    corp_num = _resolve_corporate_number(identifier)
+    result = gbizinfo.get_subsidies(corp_num)
+    return _wrap_response("gbizinfo", result)
+
+
+@app.get("/api/v1/company/{identifier}/certifications", tags=["Company"])
+async def get_company_certifications(
+    identifier: str = Path(description="法人番号（13桁）または銘柄コード"),
+):
+    """企業の認定・届出情報を取得。DX認定・ISO等の政府認定履歴。"""
+    corp_num = _resolve_corporate_number(identifier)
+    result = gbizinfo.get_certifications(corp_num)
+    return _wrap_response("gbizinfo", result)
+
+
+@app.get("/api/v1/company/{identifier}/patents", tags=["Company"])
+async def get_company_patents(
+    identifier: str = Path(description="法人番号（13桁）または銘柄コード"),
+):
+    """企業の特許情報を取得。技術力の定量指標。"""
+    corp_num = _resolve_corporate_number(identifier)
+    result = gbizinfo.get_patents(corp_num)
+    return _wrap_response("gbizinfo", result)
+
+
+@app.get("/api/v1/company/{identifier}/finance", tags=["Company"])
+async def get_company_finance(
+    identifier: str = Path(description="法人番号（13桁）または銘柄コード"),
+):
+    """企業の財務情報を取得（gBizINFO由来）。"""
+    corp_num = _resolve_corporate_number(identifier)
+    result = gbizinfo.get_finance(corp_num)
+    return _wrap_response("gbizinfo", result)
 
 
 # ===========================
