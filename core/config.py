@@ -48,10 +48,10 @@ ESTAT_CONFIG = {
     'cache_ttl_seconds': 3600 * 6,  # 6時間（政府統計は日次〜月次更新）
 }
 
-# === J-Quants設定 ===
+# === J-Quants設定（V2 APIキー認証）===
 JQUANTS_CONFIG = {
-    'api_base': 'https://api.jquants.com/v1',
-    'refresh_token': os.getenv('JQUANTS_REFRESH_TOKEN', ''),
+    'api_base': 'https://api.jquants.com/v2',
+    'api_key': os.getenv('JQUANTS_API_KEY', ''),
     'cache_ttl_seconds': 3600 * 12,  # 12時間（銘柄マスタ・決算予定）
 }
 

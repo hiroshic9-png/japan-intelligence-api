@@ -255,7 +255,7 @@ async def health():
             "edinet": "available" if edinet.api_key else "no_api_key",
             "gbizinfo": "available" if gbizinfo.api_token else "no_api_token",
             "estat": "available" if estat.app_id else "no_app_id",
-            "jquants": "available" if jquants.refresh_token else "no_refresh_token",
+            "jquants": "available" if jquants.api_key else "no_api_key",
             "macro": "available",
             "interpreter": "available" if interpreter.client else "no_api_key",
         },

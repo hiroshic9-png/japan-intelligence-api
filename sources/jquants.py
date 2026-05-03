@@ -1,9 +1,10 @@
 """
 Japan Intelligence — J-Quants データソース
 
-JPX J-Quants API (Free Plan) を利用して
+JPX J-Quants API v2 (Free Plan) を利用して
 銘柄マスタ、決算カレンダー、財務サマリーを取得する。
 
+V2認証: x-api-key ヘッダーによるAPIキー方式。
 Free Planの制約:
   - 直近12週間の株価データは取得不可（ヒストリカルのみ）
   - 信用取引データ、指数データは対象外
@@ -21,15 +22,17 @@ from core.config import JQUANTS_CONFIG
 
 
 class JQuantsSource:
-    """J-Quants API (Free) クライアント — 銘柄マスタ・決算カレンダー"""
+    """J-Quants API v2 クライアント — 銘柄マスタ・決算カレンダー"""
 
     def __init__(self):
         self.api_base = JQUANTS_CONFIG['api_base']
-        self.refresh_token = JQUANTS_CONFIG['refresh_token']
-        self._id_token = None
-        self._id_token_expiry = None
+        self.api_key = JQUANTS_CONFIG.get('api_key', '')
         self._cache = {}
         self._cache_ttl = JQUANTS_CONFIG['cache_ttl_seconds']
+
+    def _headers(self) -> dict:
+        """認証ヘッダーを返す。"""
+        return {"x-api-key": self.api_key}
 
     def get_listed_stocks(self, market: str = None) -> list[dict]:
         """
@@ -43,35 +46,35 @@ class JQuantsSource:
         if cached:
             return cached
 
-        token = self._get_id_token()
-        if not token:
+        if not self.api_key:
+            print("[J-Quants] WARNING: JQUANTS_API_KEY not set")
             return []
-
-        headers = {"Authorization": f"Bearer {token}"}
 
         try:
             resp = requests.get(
-                f"{self.api_base}/listed/info",
-                headers=headers,
-                timeout=15,
+                f"{self.api_base}/equities/master",
+                headers=self._headers(),
+                timeout=30,
             )
             if resp.status_code != 200:
-                print(f"[J-Quants] Listed stocks error {resp.status_code}")
+                print(f"[J-Quants] Listed stocks error {resp.status_code}: {resp.text[:200]}")
                 return []
 
             data = resp.json()
-            stocks = data.get("info", [])
+            stocks = data.get("data", [])
 
             results = []
             for s in stocks:
                 entry = {
                     "ticker": s.get("Code", ""),
-                    "name": s.get("CompanyName", ""),
-                    "market": s.get("MarketCodeName", ""),
-                    "sector_17": s.get("Sector17CodeName", ""),
-                    "sector_33": s.get("Sector33CodeName", ""),
-                    "scale_category": s.get("ScaleCategory", ""),
-                    "update_date": s.get("UpdateDate", ""),
+                    "name": s.get("CoName", ""),
+                    "name_en": s.get("CoNameEn", ""),
+                    "market": s.get("MktNm", ""),
+                    "sector_17": s.get("S17Nm", ""),
+                    "sector_33": s.get("S33Nm", ""),
+                    "scale_category": s.get("ScaleCat", ""),
+                    "margin": s.get("MrgnNm", ""),
+                    "date": s.get("Date", ""),
                     "source": "jquants",
                 }
 
@@ -104,32 +107,30 @@ class JQuantsSource:
         if cached:
             return cached
 
-        token = self._get_id_token()
-        if not token:
+        if not self.api_key:
             return []
 
-        headers = {"Authorization": f"Bearer {token}"}
         params = {"from": date_from, "to": date_to}
 
         try:
             resp = requests.get(
                 f"{self.api_base}/fins/announcement",
-                headers=headers,
+                headers=self._headers(),
                 params=params,
                 timeout=15,
             )
             if resp.status_code != 200:
-                print(f"[J-Quants] Earnings calendar error {resp.status_code}")
+                print(f"[J-Quants] Earnings calendar error {resp.status_code}: {resp.text[:200]}")
                 return []
 
             data = resp.json()
-            announcements = data.get("announcement", [])
+            announcements = data.get("data", data.get("announcement", []))
 
             results = []
             for a in announcements:
                 results.append({
                     "ticker": a.get("Code", ""),
-                    "company_name": a.get("CompanyName", ""),
+                    "company_name": a.get("CoName", a.get("CompanyName", "")),
                     "date": a.get("Date", ""),
                     "fiscal_year_end": a.get("FiscalYearEnd", ""),
                     "section": a.get("Section", ""),
@@ -149,7 +150,7 @@ class JQuantsSource:
         銘柄の財務サマリーを取得。
 
         Args:
-            ticker: 銘柄コード（例: "72030"）— J-Quantsは5桁コード
+            ticker: 銘柄コード（例: "7203", "7203.T"）— 5桁に自動変換
         """
         # 4桁→5桁変換
         code = ticker.replace(".T", "")
@@ -161,47 +162,61 @@ class JQuantsSource:
         if cached:
             return cached
 
-        token = self._get_id_token()
-        if not token:
+        if not self.api_key:
             return []
 
-        headers = {"Authorization": f"Bearer {token}"}
         params = {"code": code}
 
         try:
             resp = requests.get(
-                f"{self.api_base}/fins/statements",
-                headers=headers,
+                f"{self.api_base}/fins/summary",
+                headers=self._headers(),
                 params=params,
                 timeout=15,
             )
             if resp.status_code != 200:
-                print(f"[J-Quants] Financial statements error {resp.status_code}")
+                print(f"[J-Quants] Financial statements error {resp.status_code}: {resp.text[:200]}")
                 return []
 
             data = resp.json()
-            statements = data.get("statements", [])
+            statements = data.get("data", [])
 
             results = []
             for s in statements:
+                # V2フィールド名にマッピング
+                def _num(val):
+                    """文字列数値をfloatに変換。空文字はNone。"""
+                    if val is None or val == "":
+                        return None
+                    try:
+                        return float(val)
+                    except (ValueError, TypeError):
+                        return None
+
                 results.append({
                     "ticker": ticker,
-                    "disclosed_date": s.get("DisclosedDate", ""),
-                    "type_of_document": s.get("TypeOfDocument", ""),
-                    "net_sales": s.get("NetSales"),
-                    "operating_profit": s.get("OperatingProfit"),
-                    "ordinary_profit": s.get("OrdinaryProfit"),
-                    "profit": s.get("Profit"),
-                    "eps": s.get("EarningsPerShare"),
-                    "total_assets": s.get("TotalAssets"),
-                    "equity": s.get("Equity"),
-                    "equity_to_asset_ratio": s.get("EquityToAssetRatio"),
-                    "bps": s.get("BookValuePerShare"),
-                    "forecast_net_sales": s.get("ForecastNetSales"),
-                    "forecast_operating_profit": s.get("ForecastOperatingProfit"),
-                    "forecast_ordinary_profit": s.get("ForecastOrdinaryProfit"),
-                    "forecast_profit": s.get("ForecastProfit"),
-                    "forecast_eps": s.get("ForecastEarningsPerShare"),
+                    "disclosed_date": s.get("DiscDate", ""),
+                    "doc_type": s.get("DocType", ""),
+                    "period_type": s.get("CurPerType", ""),
+                    "period_start": s.get("CurPerSt", ""),
+                    "period_end": s.get("CurPerEn", ""),
+                    "net_sales": _num(s.get("Sales")),
+                    "operating_profit": _num(s.get("OP")),
+                    "ordinary_profit": _num(s.get("OdP")),
+                    "net_income": _num(s.get("NP")),
+                    "eps": _num(s.get("EPS")),
+                    "total_assets": _num(s.get("TA")),
+                    "equity": _num(s.get("Eq")),
+                    "equity_ratio": _num(s.get("EqAR")),
+                    "bps": _num(s.get("BPS")),
+                    "cfo": _num(s.get("CFO")),
+                    "dividend_annual": _num(s.get("DivAnn")),
+                    "payout_ratio": _num(s.get("PayoutRatioAnn")),
+                    # 会社予想（次期）
+                    "forecast_net_sales": _num(s.get("NxFSales")),
+                    "forecast_operating_profit": _num(s.get("NxFOP")),
+                    "forecast_net_income": _num(s.get("NxFNp")),
+                    "forecast_eps": _num(s.get("NxFEPS")),
                     "source": "jquants",
                 })
 
@@ -212,37 +227,6 @@ class JQuantsSource:
         except Exception as e:
             print(f"[J-Quants] Financial statements error: {e}")
             return []
-
-    # === Authentication ===
-
-    def _get_id_token(self) -> Optional[str]:
-        """IDトークンを取得（refresh_tokenから）。有効期限内ならキャッシュ。"""
-        if self._id_token and self._id_token_expiry:
-            if datetime.now() < self._id_token_expiry:
-                return self._id_token
-
-        if not self.refresh_token:
-            print("[J-Quants] WARNING: JQUANTS_REFRESH_TOKEN not set")
-            return None
-
-        try:
-            resp = requests.post(
-                f"{self.api_base}/token/auth_refresh",
-                params={"refreshtoken": self.refresh_token},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                self._id_token = data.get("idToken")
-                # IDトークンは24時間有効だが、余裕を持って23時間で更新
-                self._id_token_expiry = datetime.now() + timedelta(hours=23)
-                return self._id_token
-            else:
-                print(f"[J-Quants] Token refresh error {resp.status_code}: {resp.text}")
-                return None
-        except Exception as e:
-            print(f"[J-Quants] Token error: {e}")
-            return None
 
     # === Cache ===
 
