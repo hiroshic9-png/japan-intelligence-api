@@ -2,59 +2,69 @@
 
 **AIエージェントのための日本市場インテリジェンス基盤**
 
-Japan Intelligence は、日本の公開情報を構造化し、AIエージェントが即座に利用可能な形式で提供するAPIプラットフォームです。8つのデータソースを横断統合し、企業分析・マクロ経済・金融政策を1つのAPIで完結させます。
+Japan Intelligence は、日本の公開情報を構造化し、AIエージェントが即座に利用可能な形式で提供するAPIプラットフォームです。**10のデータソース**を横断統合し、企業分析・マクロ経済・金融政策を**33エンドポイント + 20 MCPツール**で完結させます。
+
+> 🎯 **1つのAPIキーで日本の全て** — 適時開示、機関投資家の持分変動、500万法人のデータベース、政府統計10系列、日銀短観、投資部門別売買動向、日米金融政策、AI解釈を統合提供
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    AI Agent (Claude, etc.)                │
-│                          ↓ MCP                           │
-│              ┌─────────────────────────┐                 │
-│              │   MCP Server (17 tools)  │                │
-│              └────────────┬────────────┘                 │
-│                           ↓ REST API                     │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │            Japan Intelligence API (FastAPI)         │  │
-│  │                                                    │  │
-│  │  Layer 2: AI Interpretation (Gemini 2.5 Flash)     │  │
-│  │  Layer 1: Structured Data                          │  │
-│  │                                                    │  │
-│  │  ┌─────┐ ┌──────┐ ┌────────┐ ┌──────┐ ┌────────┐ │  │
-│  │  │TDnet│ │EDINET│ │gBizINFO│ │e-Stat│ │J-Quants│ │  │
-│  │  └─────┘ └──────┘ └────────┘ └──────┘ └────────┘ │  │
-│  │  ┌────┐ ┌─────┐ ┌───────────┐                     │  │
-│  │  │FRED│ │Macro│ │Interpreter│                      │  │
-│  │  └────┘ └─────┘ └───────────┘                     │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    AI Agent (Claude, Cursor, etc.)                │
+│                          ↓ MCP (20 tools)                        │
+│              ┌──────────────────────────────┐                    │
+│              │   MCP Server (20 tools)       │                   │
+│              └──────────────┬───────────────┘                    │
+│                             ↓ REST API (33 endpoints)            │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │              Japan Intelligence API (FastAPI)             │    │
+│  │                                                          │    │
+│  │  Layer 2: AI Interpretation (Gemini 2.5 Flash)           │    │
+│  │  Layer 1: Structured Data + Cache-Control (per-source)   │    │
+│  │                                                          │    │
+│  │  ┌─────┐ ┌──────┐ ┌────────┐ ┌──────┐ ┌────────┐       │    │
+│  │  │TDnet│ │EDINET│ │gBizINFO│ │e-Stat│ │J-Quants│       │    │
+│  │  └─────┘ └──────┘ └────────┘ └──────┘ └────────┘       │    │
+│  │  ┌────┐ ┌───┐ ┌───┐ ┌─────┐ ┌───────────┐              │    │
+│  │  │FRED│ │BOJ│ │JPX│ │Macro│ │Interpreter│               │    │
+│  │  └────┘ └───┘ └───┘ └─────┘ └───────────┘              │    │
+│  └──────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-## Data Sources
+## Data Sources (10)
 
-| Source | Data | Coverage |
-|--------|------|----------|
-| **TDnet** | 適時開示 — 業績修正、M&A、自社株買い、配当 | 全上場企業 |
-| **EDINET** | 大量保有報告書 — 機関投資家の持分変動 | 5%超保有 |
-| **gBizINFO** | 企業情報 — 補助金、認定、特許、財務、調達 | 500万法人 |
-| **e-Stat** | 政府統計 — GDP、CPI、失業率、鉱工業生産、小売 | 日本経済全体 |
-| **J-Quants** | 市場データ — 銘柄マスタ、決算カレンダー、財務 | 全上場銘柄 |
-| **FRED** | 日米マクロ — 金利、CPI、雇用、為替、VIX | 米国+日本 |
-| **Macro** | リアルタイム指標 — 原油、金、ドル円、VIX、日経、S&P | 6指標 |
-| **AI** | Gemini 2.5 Flash による構造化データ解釈 | 全データ |
+| # | Source | Data | Coverage |
+|---|--------|------|----------|
+| 1 | **TDnet** | 適時開示 — 業績修正、M&A、自社株買い、配当等15カテゴリ自動分類 | 全上場企業 |
+| 2 | **EDINET** | 大量保有報告書 — 機関投資家の持分変動（5%超） | 全上場企業 |
+| 3 | **gBizINFO** | 企業情報 — 補助金、認定、特許、財務、調達 | 500万法人 |
+| 4 | **e-Stat** | 政府統計10系列 — GDP、CPI、失業率、鉱工業生産、小売、景気ウォッチャー、家計調査、貿易統計 | 日本経済全体 |
+| 5 | **J-Quants** | 市場データ — 全銘柄マスタ、決算カレンダー、財務サマリー | 全上場銘柄 |
+| 6 | **FRED** | 日米マクロ — 金利、CPI、雇用、為替、VIX（10系列） | 米国+日本 |
+| 7 | **BOJ** | 日銀短観 — 業況判断DI（大企業/中小×製造業/非製造業＋設備投資計画） | 四半期更新 |
+| 8 | **JPX** | 投資部門別売買動向 — 外国人、個人、信託銀行、事業法人 | 週次 |
+| 9 | **Macro** | リアルタイム指標 — 原油、金、ドル円、VIX、日経、S&P + 異常変動検知 | 6指標 |
+| 10 | **AI** | Gemini 2.5 Flash による構造化データ解釈（Layer 2） | 全データ |
 
-## Key Endpoints
+## Key Endpoints (33)
 
-### Cross-Source Intelligence
+### Intelligence — 1コールで全て把握
 
 ```bash
-# 企業インテリジェンス — 5ソース横断統合（キラー機能）
+# 日本全体ブリーフィング（朝の第一手）★ 
+GET /api/v1/briefing
+
+# 企業インテリジェンス — 5ソース横断統合（キラー機能）★
 GET /api/v1/intelligence/{ticker}
 
-# マーケットスナップショット — 市場全体を1コールで把握
+# マーケットスナップショット — 市場全体を1コールで
 GET /api/v1/market/snapshot
+
+# 開示統計 — 市場の温度感
+GET /api/v1/disclosures/stats
 ```
 
 ### Corporate Data
@@ -63,9 +73,13 @@ GET /api/v1/market/snapshot
 GET /api/v1/company/{id}              # 企業プロフィール
 GET /api/v1/company/{id}/patents      # 特許ポートフォリオ
 GET /api/v1/company/{id}/subsidies    # 補助金実績
+GET /api/v1/company/{id}/certifications # 認定情報
+GET /api/v1/company/{id}/finance      # 財務データ
 GET /api/v1/company/search?name=ソニー # 企業名検索
 GET /api/v1/disclosures               # 適時開示一覧
+GET /api/v1/disclosures/{ticker}      # 銘柄別開示
 GET /api/v1/holdings                   # 大量保有報告
+GET /api/v1/holdings/{ticker}          # 銘柄別大量保有
 ```
 
 ### Market & Financials
@@ -74,64 +88,96 @@ GET /api/v1/holdings                   # 大量保有報告
 GET /api/v1/financials/{ticker}  # 財務サマリー（売上・利益・EPS・予想）
 GET /api/v1/stocks               # 全上場銘柄マスタ
 GET /api/v1/earnings             # 決算カレンダー
-GET /api/v1/macro                # マクロ6指標
-GET /api/v1/macro/events         # 異常変動検知 + 恩恵/逆風銘柄
 ```
 
 ### Government Statistics & Global Macro
 
 ```bash
-GET /api/v1/stats/gdp            # GDP
-GET /api/v1/stats/cpi            # 消費者物価指数
-GET /api/v1/stats/summary        # マクロ統計サマリー
-GET /api/v1/global/policy        # 日米金融政策サマリー
-GET /api/v1/global/fed_funds_rate # FF金利時系列
-GET /api/v1/global/usdjpy        # ドル円時系列
+GET /api/v1/stats/series         # 利用可能統計系列一覧
+GET /api/v1/stats/summary        # マクロ統計サマリー（1コール）
+GET /api/v1/stats/{series_id}    # 個別統計（gdp, cpi, unemployment等10系列）
+GET /api/v1/stats/search/{kw}    # 統計検索
+GET /api/v1/global/series        # FRED系列一覧
+GET /api/v1/global/policy        # 日米金融政策サマリー（1コール）
+GET /api/v1/global/{series_key}  # FRED個別系列
+GET /api/v1/tankan               # 日銀短観サマリー
+GET /api/v1/tankan/{series_id}   # 短観個別系列
+GET /api/v1/tankan/series/list   # 短観系列一覧
+GET /api/v1/investor-flows       # 投資部門別売買動向
 ```
 
-### AI Interpretation
+### Macro & Events
 
 ```bash
-POST /api/v1/interpret           # 構造化データのAI解釈
+GET  /api/v1/macro               # マクロ6指標
+GET  /api/v1/macro/events        # 異常変動検知 + 恩恵/逆風銘柄
+POST /api/v1/interpret           # AI解釈（Layer 2）
+GET  /api/v1/ticker/{ticker}     # 銘柄名解決
+GET  /api/v1/health              # ヘルスチェック
 ```
+
+## Response Caching
+
+ソース特性別に最適化されたHTTPキャッシュ：
+
+| Source | Cache-Control max-age | 理由 |
+|--------|----------------------|------|
+| TDnet | 5分 | リアルタイム性重視 |
+| Macro | 5分 | リアルタイム性重視 |
+| Intelligence | 10分 | 複合ソース |
+| FRED | 1時間 | 高頻度参照 |
+| e-Stat | 6時間 | 月次更新 |
+| BOJ | 6時間 | 四半期更新 |
+| EDINET | 6時間 | 日次更新 |
+| J-Quants | 12時間 | 日次更新 |
+| JPX | 12時間 | 週次更新 |
+| gBizINFO | 24時間 | 低頻度更新 |
+
+ETag対応（304 Not Modified）、stale-while-revalidate対応。
 
 ## Authentication
 
-All endpoints (except `/docs` and `/health`) require API key authentication:
+All endpoints (except `/docs`, `/redoc`, `/health`) require API key authentication:
 
 ```bash
-# Header authentication
-curl -H "X-API-Key: YOUR_API_KEY" https://japan-intelligence-api.onrender.com/api/v1/macro
+# Header authentication (recommended)
+curl -H "X-API-Key: YOUR_API_KEY" https://japan-intelligence-api.onrender.com/api/v1/briefing
+
+# Bearer token
+curl -H "Authorization: Bearer YOUR_API_KEY" https://japan-intelligence-api.onrender.com/api/v1/briefing
 
 # Query parameter
-curl "https://japan-intelligence-api.onrender.com/api/v1/macro?api_key=YOUR_API_KEY"
+curl "https://japan-intelligence-api.onrender.com/api/v1/briefing?api_key=YOUR_API_KEY"
 ```
 
-Rate limit: **100 requests/hour** per API key.
+Rate limit: **100 requests/hour** per API key (X-RateLimit-Limit/Remaining headers).
 
-## MCP Server (AI Agent Integration)
+## MCP Server (20 tools for AI Agents)
 
-17 tools available for AI agents via [Model Context Protocol](https://modelcontextprotocol.io/):
+| Category | Tool | Description |
+|----------|------|-------------|
+| **Intelligence** | `japan_briefing` | 🌟 Daily briefing — market, policy, tankan, sentiment, flows |
+| | `market_snapshot` | Market overview — macro + events + disclosures |
+| | `company_intelligence` | 🌟 Cross-source company analysis (5 sources in 1 call) |
+| | `disclosure_stats` | Disclosure statistics — sentiment gauge |
+| **Market** | `get_disclosures` | TDnet corporate disclosures with impact assessment |
+| | `get_macro` | 6 key macro indicators (Nikkei, USD/JPY, VIX, etc.) |
+| | `detect_events` | Macro anomaly detection with stock mapping |
+| **Company** | `company_profile` | gBizINFO full company data (patents, subsidies, etc.) |
+| | `company_search` | Search 5M+ corporations |
+| | `financials` | J-Quants financial statements with forecasts |
+| | `listed_stocks` | All listed stocks master |
+| | `earnings_calendar` | Upcoming earnings dates |
+| **Economics** | `government_stats` | e-Stat 10 series (GDP, CPI, economy watchers, trade, etc.) |
+| | `stats_summary` | Macro statistics summary (1 call) |
+| | `global_macro` | FRED US + Japan macro (rates, CPI, FX, VIX) |
+| | `policy_summary` | US-Japan monetary policy summary (1 call) |
+| | `tankan` | BOJ Tankan business sentiment DI |
+| | `investor_flows` | JPX weekly investor flow data |
+| **Utility** | `lookup_ticker` | Ticker → company name resolution |
+| | `interpret` | AI interpretation (Layer 2, Gemini 2.5) |
 
-| Tool | Description |
-|------|-------------|
-| `company_intelligence` | Cross-source company analysis (5 sources in 1 call) |
-| `market_snapshot` | Complete market overview |
-| `financials` | Financial statements (sales, profit, EPS) |
-| `policy_summary` | US-Japan monetary policy summary |
-| `government_stats` | Japanese government statistics |
-| `global_macro` | FRED macro data (rates, CPI, FX) |
-| `get_disclosures` | TDnet corporate disclosures |
-| `company_profile` | gBizINFO company profile |
-| ... and 9 more | |
-
-### Setup
-
-```bash
-cd mcp-server && npm install && npm run build
-```
-
-### Claude Desktop Configuration
+### Claude Desktop / Cursor Configuration
 
 ```json
 {
@@ -173,7 +219,7 @@ python -m api.main
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `EDINET_API_KEY` | Yes | EDINET disclosure API key |
-| `GEMINI_API_KEY` | Yes | Google Gemini API key (for AI interpretation) |
+| `GEMINI_API_KEY` | Yes | Google Gemini API key (Layer 2 interpretation) |
 | `GBIZ_API_TOKEN` | Yes | gBizINFO API token |
 | `ESTAT_APP_ID` | Yes | e-Stat application ID |
 | `JQUANTS_API_KEY` | Yes | J-Quants v2 API key |
@@ -183,7 +229,7 @@ python -m api.main
 
 ## API Documentation
 
-Interactive documentation available at:
+Interactive documentation:
 - **Swagger UI**: https://japan-intelligence-api.onrender.com/docs
 - **ReDoc**: https://japan-intelligence-api.onrender.com/redoc
 
