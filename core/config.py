@@ -62,13 +62,6 @@ FRED_CONFIG = {
     'cache_ttl_seconds': 3600 * 6,  # 6時間
 }
 
-# === RESAS設定（内閣府 地域経済分析）===
-RESAS_CONFIG = {
-    'api_base': 'https://opendata.resas-portal.go.jp',
-    'api_key': os.getenv('RESAS_API_KEY', ''),
-    'cache_ttl_seconds': 3600 * 24,  # 24時間（地域統計は低頻度更新）
-}
-
 # === LLM設定 ===
 LLM_CONFIG = {
     'model': 'gemini-2.5-flash',
