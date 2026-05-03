@@ -38,6 +38,8 @@ from sources.tdnet import TDnetSource
 from sources.edinet import EDINETSource
 from sources.macro import MacroSource
 from sources.gbizinfo import GBizInfoSource
+from sources.estat import EStatSource
+from sources.jquants import JQuantsSource
 from intelligence.interpreter import Interpreter
 
 # === データソース初期化 ===
@@ -45,6 +47,8 @@ tdnet = TDnetSource()
 edinet = EDINETSource()
 macro = MacroSource()
 gbizinfo = GBizInfoSource()
+estat = EStatSource()
+jquants = JQuantsSource()
 interpreter = Interpreter()
 
 
@@ -53,6 +57,8 @@ TAGS = [
     {"name": "Disclosures", "description": "TDnet適時開示情報 — 業績修正・M&A・自社株買い等の分類済みデータ"},
     {"name": "Holdings", "description": "EDINET大量保有報告書 — 機関投資家の持分変動追跡"},
     {"name": "Company", "description": "gBizINFO企業情報 — 500万法人の補助金・認定・特許・財務・調達データ"},
+    {"name": "Statistics", "description": "e-Stat政府統計 — GDP・雇用・物価・鉱工業生産・小売等のマクロ経済データ"},
+    {"name": "Market", "description": "J-Quants市場データ — 全上場銘柄マスタ・決算カレンダー・財務サマリー"},
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
     {"name": "Reference", "description": "銘柄情報・ヘルスチェック等のユーティリティ"},
@@ -248,6 +254,8 @@ async def health():
             "tdnet": "available",
             "edinet": "available" if edinet.api_key else "no_api_key",
             "gbizinfo": "available" if gbizinfo.api_token else "no_api_token",
+            "estat": "available" if estat.app_id else "no_app_id",
+            "jquants": "available" if jquants.refresh_token else "no_refresh_token",
             "macro": "available",
             "interpreter": "available" if interpreter.client else "no_api_key",
         },
@@ -256,6 +264,10 @@ async def health():
             "holdings": "/api/v1/holdings",
             "company": "/api/v1/company/{corporate_number}",
             "company_search": "/api/v1/company/search",
+            "stats": "/api/v1/stats/{series_id}",
+            "stats_summary": "/api/v1/stats/summary",
+            "stocks": "/api/v1/stocks",
+            "earnings": "/api/v1/earnings",
             "macro": "/api/v1/macro",
             "events": "/api/v1/macro/events",
             "interpret": "/api/v1/interpret",
@@ -622,6 +634,98 @@ async def get_company_finance(
     corp_num = _resolve_corporate_number(identifier)
     result = gbizinfo.get_finance(corp_num)
     return _wrap_response("gbizinfo", result)
+
+
+# ===========================
+#  e-Stat 政府統計
+# ===========================
+
+@app.get("/api/v1/stats/series", tags=["Statistics"])
+async def get_stat_series_list():
+    """利用可能な統計系列の一覧を返す。"""
+    return _wrap_response("e-stat", estat.get_available_series())
+
+
+@app.get("/api/v1/stats/summary", tags=["Statistics"])
+async def get_stats_summary():
+    """
+    主要マクロ統計サマリー — GDP・雇用・物価・生産・消費を一括取得。
+
+    エージェントが日本経済の全体像を1コールで把握するためのエンドポイント。
+    """
+    result = estat.get_macro_summary()
+    return _wrap_response("e-stat", result)
+
+
+@app.get("/api/v1/stats/{series_id}", tags=["Statistics"])
+async def get_stats(
+    series_id: str = Path(description="統計系列ID（gdp, cpi, unemployment, industrial_production, retail_sales）"),
+    limit: int = Query(default=20, ge=1, le=100, description="取得件数"),
+):
+    """
+    指定した統計系列のデータを取得する。
+
+    利用可能な系列: gdp, cpi, unemployment, industrial_production, retail_sales
+    """
+    result = estat.get_stats(series_id, limit=limit)
+    return _wrap_response("e-stat", result)
+
+
+@app.get("/api/v1/stats/search/{keyword}", tags=["Statistics"])
+async def search_stats(
+    keyword: str = Path(description="検索キーワード（例: GDP, 雇用, 物価）"),
+    limit: int = Query(default=20, ge=1, le=50, description="取得件数"),
+):
+    """統計表をキーワードで検索する（750+統計テーブル）。"""
+    result = estat.search_stats(keyword, limit=limit)
+    return _wrap_response("e-stat", result)
+
+
+# ===========================
+#  J-Quants 市場データ
+# ===========================
+
+@app.get("/api/v1/stocks", tags=["Market"])
+async def get_listed_stocks(
+    market: str = Query(default=None, description="市場フィルタ（プライム/スタンダード/グロース）"),
+):
+    """
+    全上場銘柄マスタを取得する（J-Quants）。
+
+    銘柄コード、企業名、市場区分、セクター分類を含む。
+    エージェントが銘柄のユニバースを把握するための基盤データ。
+    """
+    result = jquants.get_listed_stocks(market=market)
+    return _wrap_response("jquants", result)
+
+
+@app.get("/api/v1/earnings", tags=["Market"])
+async def get_earnings_calendar(
+    date_from: str = Query(default=None, description="開始日（YYYY-MM-DD）"),
+    date_to: str = Query(default=None, description="終了日（YYYY-MM-DD）"),
+):
+    """
+    決算発表予定カレンダーを取得する（J-Quants）。
+
+    今後30日間の決算発表予定を一覧で返す。
+    エージェントが決算イベントを先読みするためのデータ。
+    """
+    result = jquants.get_earnings_calendar(date_from=date_from, date_to=date_to)
+    return _wrap_response("jquants", result)
+
+
+@app.get("/api/v1/financials/{ticker}", tags=["Market"])
+async def get_financial_statements(
+    ticker: str = Path(description="銘柄コード（例: 7203 または 7203.T）"),
+):
+    """
+    銘柄の財務サマリーを取得する（J-Quants）。
+
+    売上・営業利益・純利益・EPS・BPS・自己資本比率と、
+    会社予想（フォーキャスト）を含む。
+    """
+    result = jquants.get_financial_statements(ticker)
+    return _wrap_response("jquants", result)
 
 
 # ===========================

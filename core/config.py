@@ -41,6 +41,20 @@ GBIZ_CONFIG = {
     'cache_ttl_seconds': 3600 * 24,  # 24時間（企業情報は頻繁に変わらない）
 }
 
+# === e-Stat設定 ===
+ESTAT_CONFIG = {
+    'api_base': 'https://api.e-stat.go.jp/rest/3.0/app/json',
+    'app_id': os.getenv('ESTAT_APP_ID', ''),
+    'cache_ttl_seconds': 3600 * 6,  # 6時間（政府統計は日次〜月次更新）
+}
+
+# === J-Quants設定 ===
+JQUANTS_CONFIG = {
+    'api_base': 'https://api.jquants.com/v1',
+    'refresh_token': os.getenv('JQUANTS_REFRESH_TOKEN', ''),
+    'cache_ttl_seconds': 3600 * 12,  # 12時間（銘柄マスタ・決算予定）
+}
+
 # === LLM設定 ===
 LLM_CONFIG = {
     'model': 'gemini-2.5-flash',
