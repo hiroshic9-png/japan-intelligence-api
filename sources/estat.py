@@ -42,6 +42,32 @@ ESTAT_SERIES = {
         "label": "小売業販売額",
         "category": "consumption",
     },
+    # --- Wave 1 拡張 ---
+    "economy_watchers": {
+        "statsDataId": "0003348423",  # 景気ウォッチャー調査 季節調整値DI
+        "label": "景気ウォッチャー調査（DI）",
+        "category": "sentiment",
+    },
+    "economy_watchers_regional": {
+        "statsDataId": "0003348424",  # 景気ウォッチャー調査 地域別DI
+        "label": "景気ウォッチャー調査（地域別DI）",
+        "category": "sentiment",
+    },
+    "household_spending": {
+        "statsDataId": "0003343671",  # 家計調査 二人以上世帯 消費支出
+        "label": "家計調査（消費支出）",
+        "category": "consumption",
+    },
+    "trade_exports": {
+        "statsDataId": "0003228190",  # 貿易統計 概況品別輸出
+        "label": "貿易統計（輸出）",
+        "category": "trade",
+    },
+    "trade_imports": {
+        "statsDataId": "0003228199",  # 貿易統計 概況品別輸入
+        "label": "貿易統計（輸入）",
+        "category": "trade",
+    },
 }
 
 

@@ -41,6 +41,8 @@ from sources.gbizinfo import GBizInfoSource
 from sources.estat import EStatSource
 from sources.jquants import JQuantsSource
 from sources.fred import FredSource
+from sources.boj import BOJSource
+from sources.jpx_investor import JPXInvestorFlowSource
 from intelligence.interpreter import Interpreter
 
 # === データソース初期化 ===
@@ -51,6 +53,8 @@ gbizinfo = GBizInfoSource()
 estat = EStatSource()
 jquants = JQuantsSource()
 fred = FredSource()
+boj = BOJSource()
+jpx_investor = JPXInvestorFlowSource()
 interpreter = Interpreter()
 
 
@@ -59,8 +63,10 @@ TAGS = [
     {"name": "Disclosures", "description": "TDnet適時開示情報 — 業績修正・M&A・自社株買い等の分類済みデータ"},
     {"name": "Holdings", "description": "EDINET大量保有報告書 — 機関投資家の持分変動追跡"},
     {"name": "Company", "description": "gBizINFO企業情報 — 500万法人の補助金・認定・特許・財務・調達データ"},
-    {"name": "Statistics", "description": "e-Stat政府統計 — GDP・雇用・物価・鉱工業生産・小売等のマクロ経済データ"},
+    {"name": "Statistics", "description": "e-Stat政府統計 — GDP・雇用・物価・鉱工業生産・小売・景気ウォッチャー・家計調査・貿易統計"},
     {"name": "Market", "description": "J-Quants市場データ — 全上場銘柄マスタ・決算カレンダー・財務サマリー"},
+    {"name": "BOJ", "description": "日本銀行統計 — 短観（全国企業短期経済観測調査）業況判断DI"},
+    {"name": "InvestorFlows", "description": "JPX投資部門別売買動向 — 外国人・個人・信託銀行等の週次売買データ"},
     {"name": "Global", "description": "FRED米国マクロ — 米金利・CPI・雇用・日銀政策金利・ドル円"},
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
@@ -864,6 +870,63 @@ async def get_fred_series(
     result = fred.get_series(series_key, limit=limit)
     return _wrap_response("fred", result)
 
+
+# ===========================
+#  日銀短観
+# ===========================
+
+@app.get("/api/v1/tankan", tags=["BOJ"])
+async def get_tankan_summary():
+    """
+    日銀短観サマリー — 大企業/中小企業 × 製造業/非製造業のDI一覧。
+
+    日本経済の「体温計」。プラスは好況、マイナスは不況。
+    大企業製造業DIが最も注目される。
+    """
+    result = boj.get_tankan_summary()
+    return _wrap_response("boj", result)
+
+
+@app.get("/api/v1/tankan/{series_id}", tags=["BOJ"])
+async def get_tankan_series(
+    series_id: str = Path(description="系列ID（tankan_large_manufacturing等）"),
+    limit: int = Query(default=20, ge=1, le=100, description="取得期間数"),
+):
+    """
+    短観の特定系列のデータを取得する。
+
+    利用可能な系列:
+    - tankan_large_manufacturing: 大企業製造業DI
+    - tankan_large_nonmanufacturing: 大企業非製造業DI
+    - tankan_small_manufacturing: 中小企業製造業DI
+    - tankan_small_nonmanufacturing: 中小企業非製造業DI
+    - tankan_capex_large: 大企業設備投資計画
+    """
+    result = boj.get_tankan(series_id=series_id, limit=limit)
+    return _wrap_response("boj", result)
+
+
+@app.get("/api/v1/tankan/series/list", tags=["BOJ"])
+async def get_tankan_series_list():
+    """利用可能な短観系列の一覧を返す。"""
+    return _wrap_response("boj", boj.get_available_series())
+
+
+# ===========================
+#  JPX 投資部門別売買動向
+# ===========================
+
+@app.get("/api/v1/investor-flows", tags=["InvestorFlows"])
+async def get_investor_flows():
+    """
+    JPX投資部門別売買動向 — 外国人投資家は日本株を買っているか？
+
+    外国人・個人・信託銀行（GPIF代理）・事業法人の
+    週次売買データ。市場方向の最強シグナル。
+    毎週木曜日15:30更新。
+    """
+    result = jpx_investor.get_investor_flows()
+    return _wrap_response("jpx", result)
 
 
 
