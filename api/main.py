@@ -1033,16 +1033,16 @@ async def get_company_intelligence(
     # 4. EDINET大量保有
     try:
         holdings = edinet.get_holdings(days=90)
+        ticker_code = normalized.replace(".T", "")
         company_holdings = [
             {
-                "holder_name": h.get("holder_name", ""),
-                "holding_ratio": h.get("holding_ratio"),
-                "previous_ratio": h.get("previous_ratio"),
-                "purpose": h.get("purpose", ""),
-                "report_date": h.get("report_date", ""),
+                "filer_name": h.get("filer_name", ""),
+                "title": h.get("title", ""),
+                "date": h.get("date", ""),
+                "is_correction": h.get("is_correction", False),
             }
             for h in holdings
-            if h.get("ticker", "").replace(".T", "") == normalized.replace(".T", "")
+            if h.get("code", "") == ticker_code
         ]
         result["holdings"] = {
             "count": len(company_holdings),
