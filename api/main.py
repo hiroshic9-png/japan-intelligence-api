@@ -78,6 +78,80 @@ app.add_middleware(
 )
 
 
+# === API認証 & レート制限 ===
+
+# APIキー認証（JI_API_KEY環境変数が設定されている場合のみ有効化）
+JI_API_KEY = os.getenv("JI_API_KEY", "")
+RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "100"))
+_rate_store: dict[str, list] = {}  # {client_id: [timestamps]}
+
+# 認証免除パス
+AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json", "/api/v1/health"}
+
+
+@app.middleware("http")
+async def auth_and_rate_limit(request: Request, call_next):
+    """APIキー認証 + 毎時レート制限"""
+    path = request.url.path
+
+    # 認証免除パス
+    if path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    # APIキー認証（設定されている場合のみ）
+    if JI_API_KEY:
+        api_key = (
+            request.headers.get("X-API-Key")
+            or request.headers.get("Authorization", "").replace("Bearer ", "")
+            or request.query_params.get("api_key")
+        )
+        if api_key != JI_API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "status": "error",
+                    "error": "Invalid or missing API key",
+                    "detail": "Set X-API-Key header or api_key query parameter",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            )
+
+    # レート制限（IPベース）
+    client_ip = request.client.host if request.client else "unknown"
+    client_id = api_key if JI_API_KEY and api_key else client_ip  # type: ignore
+    now = datetime.now()
+
+    if client_id not in _rate_store:
+        _rate_store[client_id] = []
+
+    # 1時間以内のリクエストのみ保持
+    _rate_store[client_id] = [
+        t for t in _rate_store[client_id]
+        if (now - t).total_seconds() < 3600
+    ]
+
+    if len(_rate_store[client_id]) >= RATE_LIMIT_PER_HOUR:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "error": "Rate limit exceeded",
+                "detail": f"Max {RATE_LIMIT_PER_HOUR} requests per hour",
+                "timestamp": now.isoformat(),
+            },
+        )
+
+    _rate_store[client_id].append(now)
+    response = await call_next(request)
+
+    # レート制限ヘッダー
+    remaining = RATE_LIMIT_PER_HOUR - len(_rate_store[client_id])
+    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_HOUR)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+
+    return response
+
+
 # === グローバル例外ハンドラ ===
 
 @app.exception_handler(Exception)
