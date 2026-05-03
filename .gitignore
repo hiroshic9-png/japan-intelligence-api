@@ -1,0 +1,8 @@
+# Japan Intelligence Backend
+venv/
+__pycache__/
+*.pyc
+.env
+*.log
+*.pkl
+.DS_Store
