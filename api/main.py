@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 
 from core.config import API_VERSION, API_TITLE, API_DESCRIPTION, TICKER_TO_CORPORATE_NUMBER
 from core.ticker_resolver import resolve_name, resolve_names_batch
+from core.cache_middleware import CacheControlMiddleware
 from sources.tdnet import TDnetSource
 from sources.edinet import EDINETSource
 from sources.macro import MacroSource
@@ -99,6 +100,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# レスポンスキャッシュ — ソース特性別TTL
+app.add_middleware(CacheControlMiddleware)
 
 
 # === API認証 & レート制限 ===
