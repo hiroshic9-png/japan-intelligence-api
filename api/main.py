@@ -832,6 +832,141 @@ async def get_market_snapshot():
 
 
 # ===========================
+#  クロスソース企業インテリジェンス
+# ===========================
+
+@app.get("/api/v1/intelligence/{ticker}", tags=["Intelligence"])
+async def get_company_intelligence(
+    ticker: str = Path(description="銘柄コード（例: 7203 または 7203.T）"),
+):
+    """
+    企業インテリジェンス — 全ソースを横断統合した包括的企業分析。
+
+    1回のAPIコールで以下を統合取得:
+    - gBizINFO: 企業プロフィール、補助金、認定、特許、調達
+    - J-Quants: 最新財務（売上・利益・EPS）+ 会社予想
+    - TDnet: 直近の適時開示（業績修正・M&A等）
+    - EDINET: 大量保有報告（機関投資家の持分変動）
+    - FRED: 関連マクロ環境（ドル円・VIX）
+
+    エージェントの最強ツール:
+    「この企業について全てを教えて」を1回で完結させる。
+    """
+    normalized = _normalize_ticker(ticker)
+    company_name = resolve_name(normalized)
+
+    # --- 並列データ収集 ---
+    result = {
+        "ticker": normalized,
+        "company_name": company_name,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # 1. gBizINFO企業プロフィール
+    try:
+        corp_num = _resolve_corporate_number(ticker)
+        profile = gbizinfo.get_company(corp_num) or {}
+        certs = gbizinfo.get_certifications(corp_num)
+        result["profile"] = {
+            "name": profile.get("name", company_name),
+            "corporate_number": corp_num,
+            "capital_stock": profile.get("capital_stock"),
+            "employee_number": profile.get("employee_number"),
+            "date_of_establishment": profile.get("date_of_establishment"),
+            "business_summary": profile.get("business_summary"),
+            "location": profile.get("location"),
+            "representative_name": profile.get("representative_name"),
+            "certification_count": len(certs),
+            "patent_count": profile.get("patent_count", 0),
+            "source": "gbizinfo",
+        }
+    except Exception:
+        result["profile"] = {"name": company_name, "source": "ticker_resolver"}
+
+    # 2. J-Quants財務
+    try:
+        financials = jquants.get_financial_statements(ticker)
+        if financials:
+            latest = financials[0]
+            result["financials"] = {
+                "period": f"{latest.get('period_start', '')} ~ {latest.get('period_end', '')}",
+                "net_sales": latest.get("net_sales"),
+                "operating_profit": latest.get("operating_profit"),
+                "net_income": latest.get("net_income"),
+                "eps": latest.get("eps"),
+                "bps": latest.get("bps"),
+                "equity_ratio": latest.get("equity_ratio"),
+                "dividend_annual": latest.get("dividend_annual"),
+                "forecast_net_sales": latest.get("forecast_net_sales"),
+                "forecast_eps": latest.get("forecast_eps"),
+                "periods_available": len(financials),
+                "source": "jquants",
+            }
+        else:
+            result["financials"] = None
+    except Exception:
+        result["financials"] = None
+
+    # 3. TDnet直近開示
+    try:
+        disclosures = tdnet.get_disclosures(days=30)
+        company_disclosures = [
+            {
+                "title": d["title"][:80],
+                "category": d.get("category", ""),
+                "impact": d.get("impact", ""),
+                "date": d.get("date", ""),
+            }
+            for d in disclosures
+            if d.get("ticker", "").replace(".T", "") == normalized.replace(".T", "")
+        ]
+        result["disclosures"] = {
+            "count": len(company_disclosures),
+            "items": company_disclosures[:10],
+            "source": "tdnet",
+        }
+    except Exception:
+        result["disclosures"] = {"count": 0, "items": [], "source": "tdnet"}
+
+    # 4. EDINET大量保有
+    try:
+        holdings = edinet.get_holdings(days=90)
+        company_holdings = [
+            {
+                "holder_name": h.get("holder_name", ""),
+                "holding_ratio": h.get("holding_ratio"),
+                "previous_ratio": h.get("previous_ratio"),
+                "purpose": h.get("purpose", ""),
+                "report_date": h.get("report_date", ""),
+            }
+            for h in holdings
+            if h.get("ticker", "").replace(".T", "") == normalized.replace(".T", "")
+        ]
+        result["holdings"] = {
+            "count": len(company_holdings),
+            "items": company_holdings[:10],
+            "source": "edinet",
+        }
+    except Exception:
+        result["holdings"] = {"count": 0, "items": [], "source": "edinet"}
+
+    # 5. マクロ環境コンテキスト
+    try:
+        policy = fred.get_policy_summary()
+        result["macro_context"] = {
+            "usdjpy": policy.get("series", {}).get("usdjpy", {}).get("latest_value"),
+            "vix": policy.get("series", {}).get("vix", {}).get("latest_value"),
+            "fed_rate": policy.get("series", {}).get("fed_funds_rate", {}).get("latest_value"),
+            "boj_rate": policy.get("series", {}).get("boj_rate", {}).get("latest_value"),
+            "source": "fred",
+        }
+    except Exception:
+        result["macro_context"] = None
+
+    return _wrap_response("intelligence", result)
+
+
+# ===========================
 #  エントリポイント
 # ===========================
 if __name__ == "__main__":
