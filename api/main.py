@@ -997,6 +997,111 @@ async def get_market_snapshot():
 
 
 # ===========================
+#  Japan Briefing — 全体ブリーフィング
+# ===========================
+
+@app.get("/api/v1/briefing", tags=["Intelligence"])
+async def get_japan_briefing():
+    """
+    Japan Briefing — 日本市場の全体像を1コールで把握する最強エンドポイント。
+
+    このエンドポイントは「今日の日本」を1回の呼び出しで完全に理解するために設計。
+    AIエージェントが朝一に呼ぶべきツール。
+
+    含まれるデータ:
+    - マクロ6指標（日経・ドル円・VIX・原油・金・S&P500）
+    - 日米金融政策（FF金利・日銀金利・米10Y/2Y利回り）
+    - 日銀短観DI（大企業製造業・非製造業）
+    - 景気ウォッチャーDI
+    - 直近の適時開示ハイライト
+    - 投資部門別売買動向
+    """
+    result = {}
+
+    # 1. マクロ指標
+    try:
+        result["market"] = {
+            "indicators": macro.get_indicators(),
+            "events": macro.detect_events(),
+        }
+    except Exception:
+        result["market"] = {"error": "fetch_failed"}
+
+    # 2. 金融政策
+    try:
+        result["policy"] = fred.get_policy_summary()
+    except Exception:
+        result["policy"] = {"error": "fetch_failed"}
+
+    # 3. 短観DI
+    try:
+        tankan_data = boj.get_tankan_summary()
+        tankan_brief = {}
+        for item in tankan_data.get("items", []):
+            lv = item.get("latest_value")
+            if isinstance(lv, tuple):
+                lv = lv[0]
+            tankan_brief[item["id"]] = {
+                "label": item["label"],
+                "di": lv,
+                "trend": item.get("trend", "unknown"),
+            }
+        result["tankan"] = tankan_brief
+    except Exception:
+        result["tankan"] = {"error": "fetch_failed"}
+
+    # 4. 景気ウォッチャー
+    try:
+        ew = estat.get_stats("economy_watchers", limit=3)
+        ew_data = ew.get("data", [])
+        if ew_data:
+            result["economy_watchers"] = {
+                "latest_di": ew_data[0].get("value"),
+                "period": ew_data[0].get("time"),
+                "previous_di": ew_data[1].get("value") if len(ew_data) > 1 else None,
+                "label": "景気ウォッチャー調査DI（現状判断）",
+            }
+        else:
+            result["economy_watchers"] = {"error": "no_data"}
+    except Exception:
+        result["economy_watchers"] = {"error": "fetch_failed"}
+
+    # 5. 適時開示ハイライト
+    try:
+        disclosures = tdnet.get_disclosures(days=1)
+        notable = []
+        for d in disclosures:
+            imp = d.get("impact", "NEUTRAL")
+            if imp in ("POSITIVE", "NEGATIVE"):
+                if not d.get("company_name"):
+                    d["company_name"] = resolve_name(d["ticker"])
+                notable.append({
+                    "ticker": d["ticker"],
+                    "company": d["company_name"],
+                    "title": d["title"][:60],
+                    "impact": imp,
+                })
+        result["disclosures"] = {
+            "today_count": len(disclosures),
+            "notable": notable[:5],
+        }
+    except Exception:
+        result["disclosures"] = {"error": "fetch_failed"}
+
+    # 6. 投資部門別
+    try:
+        result["investor_flows"] = jpx_investor.get_investor_flows()
+    except Exception:
+        result["investor_flows"] = {"error": "fetch_failed"}
+
+    return _wrap_response("japan_briefing", {
+        "timestamp": datetime.now().isoformat(),
+        "description": "Complete Japan market briefing — use this as your daily starting point",
+        **result,
+    })
+
+
+# ===========================
 #  クロスソース企業インテリジェンス
 # ===========================
 
