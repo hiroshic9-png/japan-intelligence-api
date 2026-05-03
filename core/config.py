@@ -55,6 +55,20 @@ JQUANTS_CONFIG = {
     'cache_ttl_seconds': 3600 * 12,  # 12時間（銘柄マスタ・決算予定）
 }
 
+# === FRED設定（米連邦準備制度）===
+FRED_CONFIG = {
+    'api_base': 'https://api.stlouisfed.org/fred',
+    'api_key': os.getenv('FRED_API_KEY', ''),
+    'cache_ttl_seconds': 3600 * 6,  # 6時間
+}
+
+# === RESAS設定（内閣府 地域経済分析）===
+RESAS_CONFIG = {
+    'api_base': 'https://opendata.resas-portal.go.jp',
+    'api_key': os.getenv('RESAS_API_KEY', ''),
+    'cache_ttl_seconds': 3600 * 24,  # 24時間（地域統計は低頻度更新）
+}
+
 # === LLM設定 ===
 LLM_CONFIG = {
     'model': 'gemini-2.5-flash',

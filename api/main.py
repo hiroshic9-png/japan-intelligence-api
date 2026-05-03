@@ -40,6 +40,8 @@ from sources.macro import MacroSource
 from sources.gbizinfo import GBizInfoSource
 from sources.estat import EStatSource
 from sources.jquants import JQuantsSource
+from sources.fred import FredSource
+from sources.resas import ResasSource
 from intelligence.interpreter import Interpreter
 
 # === データソース初期化 ===
@@ -49,6 +51,8 @@ macro = MacroSource()
 gbizinfo = GBizInfoSource()
 estat = EStatSource()
 jquants = JQuantsSource()
+fred = FredSource()
+resas = ResasSource()
 interpreter = Interpreter()
 
 
@@ -59,6 +63,8 @@ TAGS = [
     {"name": "Company", "description": "gBizINFO企業情報 — 500万法人の補助金・認定・特許・財務・調達データ"},
     {"name": "Statistics", "description": "e-Stat政府統計 — GDP・雇用・物価・鉱工業生産・小売等のマクロ経済データ"},
     {"name": "Market", "description": "J-Quants市場データ — 全上場銘柄マスタ・決算カレンダー・財務サマリー"},
+    {"name": "Global", "description": "FRED米国マクロ — 米金利・CPI・雇用・日銀政策金利・ドル円"},
+    {"name": "Regional", "description": "RESAS地域経済 — 産業構造・人口動態・観光・賌金"},
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
     {"name": "Reference", "description": "銘柄情報・ヘルスチェック等のユーティリティ"},
@@ -256,6 +262,8 @@ async def health():
             "gbizinfo": "available" if gbizinfo.api_token else "no_api_token",
             "estat": "available" if estat.app_id else "no_app_id",
             "jquants": "available" if jquants.api_key else "no_api_key",
+            "fred": "available" if fred.api_key else "no_api_key",
+            "resas": "available" if resas.api_key else "no_api_key",
             "macro": "available",
             "interpreter": "available" if interpreter.client else "no_api_key",
         },
@@ -726,6 +734,86 @@ async def get_financial_statements(
     """
     result = jquants.get_financial_statements(ticker)
     return _wrap_response("jquants", result)
+
+
+# ===========================
+#  FRED 米国マクロ
+# ===========================
+
+@app.get("/api/v1/global/series", tags=["Global"])
+async def get_fred_series_list():
+    """利用可能なFRED系列一覧（米金利・CPI・雇用・日銀金利・ドル円等）。"""
+    return _wrap_response("fred", fred.get_available_series())
+
+
+@app.get("/api/v1/global/policy", tags=["Global"])
+async def get_policy_summary():
+    """
+    日米金融政策サマリー — FF金利・日銀金利・米10Y/2Y・ドル円・VIX。
+
+    エージェントが金融環境を1コールで把握するためのエンドポイント。
+    """
+    result = fred.get_policy_summary()
+    return _wrap_response("fred", result)
+
+
+@app.get("/api/v1/global/{series_key}", tags=["Global"])
+async def get_fred_series(
+    series_key: str = Path(description="系列キー（fed_funds_rate, boj_rate, usdjpy, us_cpi, vix等）"),
+    limit: int = Query(default=30, ge=1, le=200, description="取得件数"),
+):
+    """指定したFRED系列のデータを取得する。"""
+    result = fred.get_series(series_key, limit=limit)
+    return _wrap_response("fred", result)
+
+
+# ===========================
+#  RESAS 地域経済
+# ===========================
+
+@app.get("/api/v1/regional/prefectures", tags=["Regional"])
+async def get_prefectures():
+    """都道府県一覧を取得する。"""
+    result = resas.get_prefectures()
+    return _wrap_response("resas", result)
+
+
+@app.get("/api/v1/regional/industry/{pref_code}", tags=["Regional"])
+async def get_regional_industry(
+    pref_code: int = Path(description="都道府県コード（1=北海道, 13=東京, 23=愛知, 27=大阪）"),
+    year: int = Query(default=2020, description="対象年"),
+):
+    """都道府県の産業構造（付加価値額ベース）。"""
+    result = resas.get_industry_composition(pref_code, year=year)
+    return _wrap_response("resas", result)
+
+
+@app.get("/api/v1/regional/population/{pref_code}", tags=["Regional"])
+async def get_regional_population(
+    pref_code: int = Path(description="都道府県コード"),
+):
+    """人口構成（年齢3区分）の推移。高齢化率・労働人口の地域差を把握。"""
+    result = resas.get_population(pref_code)
+    return _wrap_response("resas", result)
+
+
+@app.get("/api/v1/regional/tourism/{pref_code}", tags=["Regional"])
+async def get_regional_tourism(
+    pref_code: int = Path(description="都道府県コード"),
+    year: int = Query(default=2022, description="対象年"),
+):
+    """観光データ（外国人・日本人の流入）。インバウンドセクター分析用。"""
+    result = resas.get_tourism(pref_code, year=year)
+    return _wrap_response("resas", result)
+
+
+@app.get("/api/v1/regional/wages/{pref_code}", tags=["Regional"])
+async def get_regional_wages(
+    pref_code: int = Path(description="都道府県コード"),
+):
+    """一人当たり賌金の推移。地域の経済力指標。"""
+    result = resas.get_wages(pref_code)
+    return _wrap_response("resas", result)
 
 
 # ===========================
