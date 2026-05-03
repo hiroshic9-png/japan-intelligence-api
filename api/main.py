@@ -1162,6 +1162,7 @@ async def get_company_intelligence(
     1回のAPIコールで以下を統合取得:
     - gBizINFO: 企業プロフィール、補助金、認定、特許、調達
     - J-Quants: 最新財務（売上・利益・EPS）+ 会社予想
+    - J-Quants: 株価ヒストリカル（最新価格・移動平均・騰落率）
     - TDnet: 直近の適時開示（業績修正・M&A等）
     - EDINET: 大量保有報告（機関投資家の持分変動）
     - FRED: 関連マクロ環境（ドル円・VIX）
@@ -1279,6 +1280,23 @@ async def get_company_intelligence(
         }
     except Exception:
         result["macro_context"] = None
+
+    # 6. 株価ヒストリカル（J-Quants Free Plan: 12週間遅延）
+    try:
+        prices = jquants.get_stock_prices(ticker, limit=5)
+        if prices and not prices.get("error"):
+            result["stock_price"] = {
+                "latest": prices.get("latest_price"),
+                "moving_averages": prices.get("moving_averages"),
+                "price_change": prices.get("price_change"),
+                "period": prices.get("period"),
+                "note": prices.get("note"),
+                "source": "jquants",
+            }
+        else:
+            result["stock_price"] = None
+    except Exception:
+        result["stock_price"] = None
 
     return _wrap_response("intelligence", result)
 
