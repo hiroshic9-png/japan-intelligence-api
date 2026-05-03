@@ -994,6 +994,8 @@ async def get_market_snapshot():
     - 検出されたマクロ異常変動イベント
     - 直近の適時開示統計（カテゴリ・インパクト分布）
     - 注目開示（POSITIVE/NEGATIVEのみ）
+    - 投資部門別売買動向（外国人・個人・信託銀行・事業法人のネットフロー）
+    - セクター概況（市場区分別銘柄数）
     """
     # マクロ指標
     indicators = macro.get_indicators()
@@ -1028,6 +1030,37 @@ async def get_market_snapshot():
             {'ticker': t, 'company_name': resolve_name(t)} for t in e.get('negative_tickers', [])
         ]
 
+    # 投資部門別売買動向（外国人投資家フロー）
+    try:
+        flows_data = jpx_investor.get_investor_flows()
+        investor_summary = {}
+        flows = flows_data.get("flows", {})
+        for key in ["foreigners", "individuals", "trust_banks", "corporations"]:
+            f = flows.get(key)
+            if f and f.get("net") is not None:
+                investor_summary[key] = {
+                    "name": f.get("name_jp"),
+                    "net": f["net"],
+                    "signal": f.get("signal"),
+                }
+        investor_section = {
+            "period": flows_data.get("period"),
+            "key_flows": investor_summary,
+            "highlights": flows_data.get("highlights", []),
+        }
+    except Exception:
+        investor_section = {"error": "fetch_failed"}
+
+    # セクター概況
+    try:
+        sector_data = jquants.get_sector_summary()
+        sector_section = {
+            "total_stocks": sector_data.get("total_stocks"),
+            "market_distribution": sector_data.get("market_distribution", [])[:5],
+        }
+    except Exception:
+        sector_section = None
+
     return _wrap_response("market_snapshot", {
         "timestamp": datetime.now().isoformat(),
         "macro": {
@@ -1040,6 +1073,8 @@ async def get_market_snapshot():
             "impact_breakdown": impact_counts,
             "notable": notable[:10],
         },
+        "investor_flows": investor_section,
+        "sector_overview": sector_section,
     })
 
 
