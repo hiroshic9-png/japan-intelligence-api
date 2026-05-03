@@ -2,18 +2,27 @@
 Japan Intelligence — EDINET大量保有報告データソース
 
 EDINET API v2を利用して大量保有報告書・変更報告書を取得し構造化する。
-ASTRAのedinet_fetcher.pyから転用・拡張。
 
 重複排除ロジック:
   - 訂正報告書（docTypeCode=360）は parentDocID で原本に紐づけ
   - 原本に訂正がある場合、訂正報告書で置き換え（最新の訂正を優先）
   - 同一parentDocIDへの複数訂正は最新のsubmitDateTimeのみ保持
+
+銘柄コード紐付けロジック:
+  - 大量保有報告書の `secCode` は **報告者** のコード
+  - 報告対象企業は `issuerEdinetCode` で特定
+  - `edinetCode → secCode` マッピングテーブルで逆引き
+  - マッピングは全書類メタデータから動的に構築（30日分）
 """
+import json
 import os
 import time
 import requests
 from datetime import datetime, timedelta
 from core.config import EDINET_CONFIG
+
+# マッピングファイルパス
+_MAPPING_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'edinet_code_map.json')
 
 
 class EDINETSource:
@@ -25,14 +34,20 @@ class EDINETSource:
         self._cache = []
         self._cache_time = None
         self._cache_ttl = EDINET_CONFIG['cache_ttl_seconds']
+        # edinetCode → secCode マッピングテーブル
+        self._edinet_to_sec = {}
+        self._edinet_to_name = {}
+        self._mapping_built = False
+        # ローカルマッピングファイルを読み込み
+        self._load_mapping_file()
 
     def get_holdings(self, days: int = None, ticker: str = None) -> list[dict]:
         """
-        大量保有報告書を取得する（重複排除済み）。
+        大量保有報告書を取得する（重複排除・銘柄コード補正済み）。
 
         Args:
             days: 取得期間（日数）
-            ticker: 特定銘柄でフィルタ（例: "7203.T"）
+            ticker: 特定銘柄でフィルタ（例: "7203" or "7203.T"）
         """
         days = days or EDINET_CONFIG['default_days']
 
@@ -45,12 +60,15 @@ class EDINETSource:
             self._cache_time = datetime.now()
 
         if ticker:
-            results = [r for r in results if r['ticker'] == ticker]
+            # 正規化: .T除去して4桁コードで比較
+            normalized = ticker.replace(".T", "")[:4]
+            results = [r for r in results
+                       if r.get('target_code', r.get('code', '')) == normalized]
 
         return results
 
     def _fetch(self, days: int) -> list[dict]:
-        """EDINET APIから大量保有報告書を取得（生データ、重複排除前）"""
+        """EDINET APIから大量保有報告書を取得し、銘柄コードを正しく紐付ける"""
         if not self.api_key:
             print("[EDINET] WARNING: EDINET_API_KEY not set")
             return []
@@ -73,29 +91,51 @@ class EDINETSource:
                     data = resp.json()
                     docs = data.get("results", [])
 
+                    # 全書類からedinetCode→secCodeマッピングを構築
+                    self._build_mapping_from_docs(docs)
+
                     for doc in docs:
                         title = doc.get("docDescription", "")
                         if title and ("大量保有報告書" in title or "変更報告書" in title):
-                            code = doc.get("secCode")
-                            if code and len(str(code)) >= 4:
-                                ticker_code = str(code)[:4]
-                                parent_doc_id = doc.get("parentDocID", "")
-                                doc_type_code = doc.get("docTypeCode", "")
-                                is_correction = (str(doc_type_code) == "360")
+                            filer_sec_code = doc.get("secCode")
+                            issuer_edinet = doc.get("issuerEdinetCode", "")
+                            filer_edinet = doc.get("edinetCode", "")
 
-                                results.append({
-                                    'ticker': f"{ticker_code}.T",
-                                    'code': ticker_code,
-                                    'filer_name': doc.get("filerName", ""),
-                                    'title': title,
-                                    'date': target_date,
-                                    'doc_id': doc.get("docID", ""),
-                                    'doc_type': doc_type_code,
-                                    'parent_doc_id': parent_doc_id,
-                                    'is_correction': is_correction,
-                                    'submit_datetime': doc.get("submitDateTime", ""),
-                                    'source': 'edinet',
-                                })
+                            # 報告対象企業の銘柄コードを逆引き
+                            target_code = None
+                            target_name = None
+                            if issuer_edinet:
+                                target_code = self._edinet_to_sec.get(issuer_edinet)
+                                target_name = self._edinet_to_name.get(issuer_edinet)
+
+                            # フォールバック: 逆引き失敗時はfilerのsecCodeを使用
+                            if not target_code and filer_sec_code and len(str(filer_sec_code)) >= 4:
+                                target_code = str(filer_sec_code)[:4]
+
+                            if not target_code:
+                                continue
+
+                            parent_doc_id = doc.get("parentDocID", "")
+                            doc_type_code = doc.get("docTypeCode", "")
+                            is_correction = (str(doc_type_code) == "360")
+
+                            results.append({
+                                'ticker': f"{target_code}.T",
+                                'code': target_code,
+                                'target_code': target_code,
+                                'target_name': target_name,
+                                'filer_name': doc.get("filerName", ""),
+                                'filer_edinet_code': filer_edinet,
+                                'issuer_edinet_code': issuer_edinet,
+                                'title': title,
+                                'date': target_date,
+                                'doc_id': doc.get("docID", ""),
+                                'doc_type': doc_type_code,
+                                'parent_doc_id': parent_doc_id,
+                                'is_correction': is_correction,
+                                'submit_datetime': doc.get("submitDateTime", ""),
+                                'source': 'edinet',
+                            })
                 else:
                     print(f"[EDINET] API Error {resp.status_code} on {target_date}")
             except Exception as e:
@@ -103,7 +143,25 @@ class EDINETSource:
 
             time.sleep(0.5)  # レート制限回避
 
+        if not self._mapping_built:
+            print(f"[EDINET] Mapping: {len(self._edinet_to_sec)} edinetCode→secCode entries")
+            self._mapping_built = True
+            # 新しいエントリが追加されていたら保存
+            self._save_mapping_file()
+
         return results
+
+    def _build_mapping_from_docs(self, docs: list):
+        """書類メタデータからedinetCode→secCodeマッピングを構築。"""
+        for doc in docs:
+            edinet_code = doc.get("edinetCode", "")
+            sec_code = doc.get("secCode", "")
+            filer_name = doc.get("filerName", "")
+            if edinet_code and sec_code and len(str(sec_code)) >= 4:
+                ticker = str(sec_code)[:4]
+                if edinet_code not in self._edinet_to_sec:
+                    self._edinet_to_sec[edinet_code] = ticker
+                    self._edinet_to_name[edinet_code] = filer_name
 
     def _deduplicate(self, raw: list[dict]) -> list[dict]:
         """
@@ -171,3 +229,34 @@ class EDINETSource:
             return False
         elapsed = (datetime.now() - self._cache_time).total_seconds()
         return elapsed < self._cache_ttl
+
+    def _load_mapping_file(self):
+        """ローカルのedinetCode→secCodeマッピングファイルを読み込む。"""
+        try:
+            if os.path.exists(_MAPPING_FILE):
+                with open(_MAPPING_FILE, 'r', encoding='utf-8') as f:
+                    mapping = json.load(f)
+                for code, info in mapping.items():
+                    self._edinet_to_sec[code] = info.get('sec_code', '')
+                    self._edinet_to_name[code] = info.get('name', '')
+                print(f"[EDINET] Loaded mapping: {len(mapping)} entries from local file")
+            else:
+                print(f"[EDINET] No mapping file found at {_MAPPING_FILE}")
+        except Exception as e:
+            print(f"[EDINET] Mapping file load error: {e}")
+
+    def _save_mapping_file(self):
+        """マッピングテーブルをローカルJSONに保存。"""
+        try:
+            os.makedirs(os.path.dirname(_MAPPING_FILE), exist_ok=True)
+            mapping = {}
+            for code in self._edinet_to_sec:
+                mapping[code] = {
+                    'sec_code': self._edinet_to_sec[code],
+                    'name': self._edinet_to_name.get(code, ''),
+                }
+            with open(_MAPPING_FILE, 'w', encoding='utf-8') as f:
+                json.dump(mapping, f, ensure_ascii=False, indent=0)
+            print(f"[EDINET] Saved mapping: {len(mapping)} entries")
+        except Exception as e:
+            print(f"[EDINET] Mapping save error: {e}")
