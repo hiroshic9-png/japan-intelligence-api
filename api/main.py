@@ -1170,9 +1170,24 @@ async def get_japan_briefing():
     except Exception:
         result["disclosures"] = {"error": "fetch_failed"}
 
-    # 6. 投資部門別
+    # 6. 投資部門別（主要部門サマリー）
     try:
-        result["investor_flows"] = jpx_investor.get_investor_flows()
+        flows_raw = jpx_investor.get_investor_flows()
+        flows = flows_raw.get("flows", {})
+        key_flows = {}
+        for key in ["foreigners", "individuals", "trust_banks", "corporations"]:
+            f = flows.get(key)
+            if f and f.get("net") is not None:
+                key_flows[key] = {
+                    "name": f.get("name_jp"),
+                    "net": f["net"],
+                    "signal": f.get("signal"),
+                }
+        result["investor_flows"] = {
+            "period": flows_raw.get("period"),
+            "key_flows": key_flows,
+            "highlights": flows_raw.get("highlights", []),
+        }
     except Exception:
         result["investor_flows"] = {"error": "fetch_failed"}
 
