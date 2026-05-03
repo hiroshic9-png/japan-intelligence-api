@@ -37,6 +37,8 @@ CACHE_TTL_MAP = {
     "/api/v1/stocks": (43200, 1800),         # J-Quants銘柄マスタ: 12時間
     "/api/v1/earnings": (43200, 1800),       # J-Quants決算: 12時間
     "/api/v1/financials": (43200, 1800),     # J-Quants財務: 12時間
+    "/api/v1/prices": (43200, 1800),          # J-Quants株価: 12時間（Free Plan遅延データ）
+    "/api/v1/sectors": (43200, 1800),          # J-Quantsセクター: 12時間
     "/api/v1/global": (3600, 300),           # FRED: 1時間
     "/api/v1/tankan": (21600, 600),          # BOJ短観: 6時間
     "/api/v1/investor-flows": (43200, 1800), # JPX: 12時間

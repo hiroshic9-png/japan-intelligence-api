@@ -276,8 +276,8 @@ async def health():
             "interpreter": "available" if interpreter.client else "no_api_key",
         },
         "capabilities": {
-            "total_endpoints": 33,
-            "total_mcp_tools": 20,
+            "total_endpoints": 35,
+            "total_mcp_tools": 22,
             "data_sources": 10,
             "authentication": bool(JI_API_KEY),
             "rate_limit": RATE_LIMIT_PER_HOUR,
@@ -848,6 +848,42 @@ async def get_financial_statements(
     会社予想（フォーキャスト）を含む。
     """
     result = jquants.get_financial_statements(ticker)
+    return _wrap_response("jquants", result)
+
+
+@app.get("/api/v1/prices/{ticker}", tags=["Market"])
+async def get_stock_prices(
+    ticker: str = Path(description="銘柄コード（例: 7203 または 7203.T）"),
+    date_from: str = Query(default=None, description="開始日（YYYY-MM-DD）"),
+    date_to: str = Query(default=None, description="終了日（YYYY-MM-DD）"),
+    limit: int = Query(default=60, ge=1, le=200, description="返却バー数（デフォルト60）"),
+):
+    """
+    株価ヒストリカルデータを取得する（J-Quants）。
+
+    OHLCV（始値・高値・安値・終値・出来高）+ 調整済み価格。
+    自動算出される付加データ:
+    - 移動平均（5日/25日/75日）
+    - 騰落率（日次/週次/月次）
+
+    **注意**: Free Planのため12週間遅延データ。
+    リアルタイム株価が必要な場合はPaid Planへのアップグレードが必要。
+    """
+    result = jquants.get_stock_prices(
+        ticker, date_from=date_from, date_to=date_to, limit=limit
+    )
+    return _wrap_response("jquants", result)
+
+
+@app.get("/api/v1/sectors", tags=["Market"])
+async def get_sector_summary():
+    """
+    セクター別の銘柄数・市場構成を集計する。
+
+    17業種分類・33業種分類・市場区分（プライム/スタンダード/グロース）
+    別の銘柄数と構成比を返す。エージェントが日本市場の構造を把握するためのデータ。
+    """
+    result = jquants.get_sector_summary()
     return _wrap_response("jquants", result)
 
 
