@@ -1,0 +1,31 @@
+name: Weekly EDINET Mapping Update
+
+on:
+  schedule:
+    # 毎週月曜 00:00 UTC (09:00 JST) — 週明け市場開始前に更新
+    - cron: '0 0 * * 1'
+  workflow_dispatch:  # 手動トリガーも可能
+
+jobs:
+  update-mapping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EDINET mapping update
+        run: |
+          echo "Triggering EDINET mapping update on production..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "X-API-Key: ${{ secrets.JI_API_KEY }}" \
+            "https://japan-intelligence-api.onrender.com/api/v1/cron/edinet-mapping")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::EDINET mapping update failed with status $HTTP_CODE"
+            exit 1
+          fi
+          
+          echo "✅ EDINET mapping update completed successfully"

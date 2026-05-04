@@ -22,6 +22,7 @@ Japan Intelligence API — メインサーバー
 import sys
 import os
 import traceback
+import requests
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -1349,6 +1350,126 @@ async def get_company_intelligence(
         result["stock_price"] = None
 
     return _wrap_response("intelligence", result)
+
+
+# ===========================
+#  管理エンドポイント
+# ===========================
+
+@app.post("/api/v1/admin/update-edinet-mapping", tags=["Reference"])
+async def update_edinet_mapping(request: Request):
+    """
+    EDINETコードリストを最新版に更新する（管理用）。
+
+    EDINET公式サイトから全上場企業のEDINETコード→証券コードマッピングを
+    ダウンロードし、ローカルJSONを更新する。
+    IPO・上場廃止に追従するため、週次での実行を推奨。
+
+    **認証必須**: APIキー認証が有効な場合のみ実行可能。
+    """
+    import csv
+    import io as _io
+    import zipfile
+
+    EDINET_CODE_LIST_URL = "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/codelist/Edinetcode.zip"
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+    mapping_file = os.path.join(data_dir, 'edinet_code_map.json')
+    import json
+
+    try:
+        # 1. ダウンロード
+        resp = requests.get(EDINET_CODE_LIST_URL, timeout=30)
+        resp.raise_for_status()
+
+        with zipfile.ZipFile(_io.BytesIO(resp.content)) as zf:
+            csv_name = [n for n in zf.namelist() if n.endswith('.csv')][0]
+            raw_bytes = zf.read(csv_name)
+
+        text = raw_bytes.decode('cp932')
+        reader = csv.reader(_io.StringIO(text))
+        next(reader)  # ダウンロード実行日行
+        next(reader)  # ヘッダー行
+
+        # 2. パース
+        entries = []
+        for row in reader:
+            if len(row) < 12:
+                continue
+            edinet_code = row[0].strip()
+            listing = row[2].strip()
+            name = row[6].strip()
+            sec_code_raw = row[11].strip()
+
+            if listing != '上場' or not sec_code_raw or len(sec_code_raw) < 4:
+                continue
+
+            entries.append({
+                'edinet_code': edinet_code,
+                'sec_code': sec_code_raw[:4],
+                'name': name,
+            })
+
+        # 3. マージ
+        existing = {}
+        if os.path.exists(mapping_file):
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+
+        new_count = 0
+        updated_count = 0
+        for entry in entries:
+            code = entry['edinet_code']
+            if code not in existing:
+                existing[code] = {'sec_code': entry['sec_code'], 'name': entry['name']}
+                new_count += 1
+            else:
+                if existing[code].get('name') != entry['name']:
+                    existing[code]['name'] = entry['name']
+                    updated_count += 1
+                if existing[code].get('sec_code') != entry['sec_code']:
+                    existing[code]['sec_code'] = entry['sec_code']
+                    updated_count += 1
+
+        os.makedirs(data_dir, exist_ok=True)
+        with open(mapping_file, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, ensure_ascii=False, indent=0)
+
+        sec_codes = set(v['sec_code'] for v in existing.values())
+
+        return _wrap_response("admin", {
+            "action": "update_edinet_mapping",
+            "status": "success",
+            "total_entries": len(existing),
+            "unique_tickers": len(sec_codes),
+            "new_entries": new_count,
+            "updated_entries": updated_count,
+            "listed_companies_from_fsa": len(entries),
+            "updated_at": datetime.now().isoformat(),
+        })
+
+    except Exception as e:
+        print(f"[ADMIN] EDINET mapping update failed: {e}")
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": f"EDINET mapping update failed: {str(e)}",
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+
+
+# GitHub Actions用: Cron Webhookエンドポイント
+@app.get("/api/v1/cron/edinet-mapping", tags=["Reference"])
+async def cron_edinet_mapping(request: Request):
+    """
+    EDINET mapping cronトリガー（GET — GitHub Actions / 外部cron対応）。
+
+    GitHub Actionsの scheduled workflow から週次で叩くためのエンドポイント。
+    内部的に update-edinet-mapping を呼び出す。
+    """
+    return await update_edinet_mapping(request)
 
 
 # ===========================
