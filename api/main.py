@@ -277,9 +277,9 @@ async def health():
             "interpreter": "available" if interpreter.client else "no_api_key",
         },
         "capabilities": {
-            "total_endpoints": 35,
+            "total_endpoints": 37,
             "total_mcp_tools": 22,
-            "data_sources": 10,
+            "data_sources": 11,
             "authentication": bool(JI_API_KEY),
             "rate_limit": RATE_LIMIT_PER_HOUR,
             "dynamic_ticker_resolution": True,
@@ -1470,6 +1470,125 @@ async def cron_edinet_mapping(request: Request):
     内部的に update-edinet-mapping を呼び出す。
     """
     return await update_edinet_mapping(request)
+
+
+# ===========================
+#  企業コンテキスト（The社史統合）
+# ===========================
+
+# キャッシュ: {data: [...], fetched_at: datetime}
+_shashi_cache: dict = {"data": None, "fetched_at": None, "index": {}}
+SHASHI_URL = "https://the-shashi.com/companies.json"
+SHASHI_CACHE_TTL = 86400  # 24時間
+
+
+def _fetch_shashi_data() -> list:
+    """The社史のcompanies.jsonを取得・キャッシュ"""
+    now = datetime.now()
+    if (_shashi_cache["data"] is not None
+            and _shashi_cache["fetched_at"]
+            and (now - _shashi_cache["fetched_at"]).total_seconds() < SHASHI_CACHE_TTL):
+        return _shashi_cache["data"]
+
+    try:
+        resp = requests.get(SHASHI_URL, timeout=15)
+        resp.raise_for_status()
+        raw = resp.json()
+        companies = raw.get("contents", raw) if isinstance(raw, dict) else raw
+        _shashi_cache["data"] = companies
+        _shashi_cache["fetched_at"] = now
+        # インデックス構築（stock_code → entry）
+        idx = {}
+        for entry in companies:
+            code = entry.get("company", {}).get("stock_code", "")
+            if code:
+                idx[code] = entry
+        _shashi_cache["index"] = idx
+        print(f"[Shashi] Fetched {len(companies)} companies from the-shashi.com")
+        return companies
+    except Exception as e:
+        print(f"[Shashi] Fetch error: {e}")
+        if _shashi_cache["data"]:
+            return _shashi_cache["data"]
+        return []
+
+
+@app.get("/api/v1/company/context/{stock_code}", tags=["Company"])
+async def get_company_context(
+    stock_code: str = Path(description="銘柄コード（例: 7203, 6501）"),
+):
+    """
+    企業の経営史コンテキストを返す — 創業から現在までの意思決定の軌跡。
+
+    253社の日本上場企業について、創業経緯・転換点・M&A・危機・最新業績を
+    具体的な金額・年・人名付きで構造化した歴史的文脈データ。
+    AIエージェントが企業分析を行う際の「なぜこの会社がこうなっているのか」
+    という深い理解を提供する。
+
+    データソース: The社史（the-shashi.com）— 個人研究者による編纂データ（24時間キャッシュ）
+    """
+    # .T を除去
+    code = stock_code.replace(".T", "")
+
+    companies = _fetch_shashi_data()
+    idx = _shashi_cache.get("index", {})
+
+    entry = idx.get(code)
+    if not entry:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Corporate context not found for {code}. Available for ~253 major listed companies."
+        )
+
+    company = entry.get("company", {})
+    return _wrap_response("the-shashi", {
+        "stock_code": company.get("stock_code"),
+        "name": company.get("name"),
+        "old_name": company.get("old_name"),
+        "industry": company.get("industry"),
+        "founded": entry.get("founded"),
+        "listing": entry.get("listing"),
+        "historical_summary": company.get("historical_summary"),
+        "latest_performance": entry.get("latest_performance"),
+        "updated": entry.get("updated"),
+        "source_url": f"https://the-shashi.com/tse/{code}/",
+        "attribution": "The社史 (the-shashi.com) by Yutaka Sugiura",
+    })
+
+
+@app.get("/api/v1/company/context", tags=["Company"])
+async def list_company_contexts(
+    industry: str = Query(default=None, description="業種フィルタ（例: food, construction, pharma, electric, it）"),
+    offset: int = Query(default=0, ge=0, description="ページネーション開始位置"),
+    limit: int = Query(default=50, ge=1, le=253, description="取得件数上限"),
+):
+    """
+    企業コンテキスト一覧を返す — 253社の経営史データベース。
+
+    業種フィルタで絞り込み可能。各エントリは銘柄コード・企業名・業種・創業年・
+    歴史サマリー・最新業績を含む。
+    """
+    companies = _fetch_shashi_data()
+
+    if industry:
+        companies = [
+            c for c in companies
+            if c.get("company", {}).get("industry", "") == industry
+        ]
+
+    # サマリー化（一覧ではhistorical_summaryを短縮）
+    result = []
+    for entry in companies:
+        comp = entry.get("company", {})
+        result.append({
+            "stock_code": comp.get("stock_code"),
+            "name": comp.get("name"),
+            "industry": comp.get("industry"),
+            "founded": entry.get("founded"),
+            "latest_performance": entry.get("latest_performance"),
+        })
+
+    return _wrap_response("the-shashi", result, total=len(result), offset=offset, limit=limit)
 
 
 # ===========================
