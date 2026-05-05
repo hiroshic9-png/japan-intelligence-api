@@ -46,6 +46,9 @@ from sources.fred import FredSource
 from sources.boj import BOJSource
 from sources.jpx_investor import JPXInvestorFlowSource
 from intelligence.interpreter import Interpreter
+from sources.weather import WeatherSource
+from sources.earthquake import EarthquakeSource
+from sources.calendar import EconomicCalendarSource
 
 # === データソース初期化 ===
 tdnet = TDnetSource()
@@ -58,6 +61,9 @@ fred = FredSource()
 boj = BOJSource()
 jpx_investor = JPXInvestorFlowSource()
 interpreter = Interpreter()
+weather = WeatherSource()
+earthquake = EarthquakeSource()
+calendar = EconomicCalendarSource()
 
 
 # === OpenAPI タグ定義 ===
@@ -72,6 +78,7 @@ TAGS = [
     {"name": "Global", "description": "FRED米国マクロ — 米金利・CPI・雇用・日銀政策金利・ドル円"},
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
+    {"name": "Environment", "description": "環境・災害データ — 天気予報（Open-Meteo/JMA）・地震（USGS）・経済カレンダー"},
     {"name": "Reference", "description": "銘柄情報・ヘルスチェック等のユーティリティ"},
 ]
 
@@ -275,11 +282,14 @@ async def health():
             "jpx_investor": "available",
             "macro": "available",
             "interpreter": "available" if interpreter.client else "no_api_key",
+            "weather": "available",
+            "earthquake": "available",
+            "calendar": "available",
         },
         "capabilities": {
-            "total_endpoints": 37,
-            "total_mcp_tools": 22,
-            "data_sources": 11,
+            "total_endpoints": 44,
+            "total_mcp_tools": 27,
+            "data_sources": 14,
             "authentication": bool(JI_API_KEY),
             "rate_limit": RATE_LIMIT_PER_HOUR,
             "dynamic_ticker_resolution": True,
@@ -308,6 +318,10 @@ async def health():
             "events": "/api/v1/macro/events",
             "interpret": "/api/v1/interpret",
             "ticker": "/api/v1/ticker/{ticker}",
+            "weather": "/api/v1/weather",
+            "earthquakes": "/api/v1/earthquakes",
+            "calendar": "/api/v1/calendar",
+            "calendar_holidays": "/api/v1/calendar/holidays",
             "docs": "/docs",
         },
     }
@@ -1192,9 +1206,57 @@ async def get_japan_briefing():
     except Exception:
         result["investor_flows"] = {"error": "fetch_failed"}
 
+    # 7. 天気（東京の現在天候 + 全都市のビジネスアラート）
+    try:
+        weather_data = weather.get_japan_weather(cities=["tokyo"])
+        tokyo_weather = weather_data.get("cities", {}).get("tokyo", {})
+        current = tokyo_weather.get("current", {})
+        impact = tokyo_weather.get("business_impact", {})
+        result["weather"] = {
+            "tokyo_current": {
+                "temperature_c": current.get("temperature_c"),
+                "weather": current.get("weather_description"),
+                "wind_kmh": current.get("wind_speed_kmh"),
+            },
+            "business_alerts": impact.get("alerts", [])[:3],
+            "risk_level": impact.get("risk_level", "normal"),
+            "source": "Open-Meteo (JMA)",
+        }
+    except Exception:
+        result["weather"] = {"error": "fetch_failed"}
+
+    # 8. 地震（直近7日サマリー）
+    try:
+        quake_data = earthquake.get_recent_earthquakes(days=7, min_magnitude=4.0)
+        summary = quake_data.get("summary", {})
+        result["seismic"] = {
+            "events_7d": summary.get("total_events", 0),
+            "max_magnitude": summary.get("max_magnitude", 0),
+            "risk_level": summary.get("seismic_risk_level", "low"),
+            "max_event": summary.get("max_event"),
+            "source": "USGS",
+        }
+    except Exception:
+        result["seismic"] = {"error": "fetch_failed"}
+
+    # 9. 経済カレンダー（今後7日のイベント）
+    try:
+        cal_data = calendar.get_upcoming_events(days=7, importance=None)
+        events = cal_data.get("events", [])
+        # 休場日を分離
+        non_holiday = [e for e in events if e["category"] != "holiday"]
+        holidays = [e for e in events if e["category"] == "holiday"]
+        result["upcoming_events"] = {
+            "events_7d": non_holiday[:5],
+            "holidays_7d": [h["event_jp"] + f" ({h['date']})" for h in holidays],
+            "next_critical": cal_data.get("next_critical_event"),
+        }
+    except Exception:
+        result["upcoming_events"] = {"error": "fetch_failed"}
+
     return _wrap_response("japan_briefing", {
         "timestamp": datetime.now().isoformat(),
-        "description": "Complete Japan market briefing — use this as your daily starting point",
+        "description": "Complete Japan briefing — market, policy, weather, seismic, and calendar in one call",
         **result,
     })
 
@@ -1589,6 +1651,94 @@ async def list_company_contexts(
         })
 
     return _wrap_response("the-shashi", result, total=len(result), offset=offset, limit=limit)
+
+
+# ===========================
+#  天気予報（Open-Meteo / JMA）
+# ===========================
+
+@app.get("/api/v1/weather", tags=["Environment"])
+async def get_japan_weather(
+    cities: str = Query(default=None, description="都市コンマ区切り（tokyo,osaka等。未指定で全都市）"),
+):
+    """
+    日本主要8都市の天気予報を返す — ビジネスインパクト判定付き。
+
+    APIキー不要（Open-Meteo無料API経由）。
+    猛暑・大雨・寒波等の異常気象がビジネスに与える影響を自動判定。
+    対象都市: 東京・大阪・名古屋・福岡・札幌・仙台・広島・那覇
+
+    データソース: Open-Meteo (JMA GSM/MSMモデル)
+    """
+    city_list = cities.split(",") if cities else None
+    result = weather.get_japan_weather(cities=city_list)
+    return _wrap_response("weather", result)
+
+
+@app.get("/api/v1/weather/cities", tags=["Environment"])
+async def get_weather_cities():
+    """利用可能な都市一覧を返す。"""
+    return _wrap_response("weather", weather.get_available_cities())
+
+
+# ===========================
+#  地震データ（USGS）
+# ===========================
+
+@app.get("/api/v1/earthquakes", tags=["Environment"])
+async def get_earthquakes(
+    days: int = Query(default=7, ge=1, le=30, description="取得期間（日数）"),
+    min_magnitude: float = Query(default=3.0, ge=1.0, le=9.0, description="最小マグニチュード"),
+):
+    """
+    日本周辺の地震データを返す — ビジネスインパクト・セクター影響分析付き。
+
+    APIキー不要（USGS無料API経由）。
+    M5+の地震は保険・建設・物流セクターに影響。
+    M7+または津波警報はインフラ全般に影響。
+
+    データソース: USGS Earthquake Catalog
+    対象範囲: 北緯24-46° 東経122-150°（日本全域 + 周辺海域）
+    """
+    result = earthquake.get_recent_earthquakes(days=days, min_magnitude=min_magnitude)
+    return _wrap_response("earthquake", result)
+
+
+# ===========================
+#  経済カレンダー
+# ===========================
+
+@app.get("/api/v1/calendar", tags=["Environment"])
+async def get_economic_calendar(
+    days: int = Query(default=30, ge=1, le=365, description="先読み期間（日数）"),
+    category: str = Query(default=None, description="カテゴリ（monetary_policy/survey/gdp/inflation/employment/earnings/holiday）"),
+    importance: str = Query(default=None, description="重要度（critical/high/medium/info）"),
+):
+    """
+    日本経済カレンダー — 今後の重要イベントを先読みする。
+
+    BOJ金融政策決定会合、日銀短観、GDP速報、CPI、雇用統計、
+    決算シーズン、東証休場日を網羅。
+
+    エージェントが「今後1ヶ月で何が起きるか」を1コールで把握するためのツール。
+    """
+    result = calendar.get_upcoming_events(days=days, category=category, importance=importance)
+    return _wrap_response("calendar", result)
+
+
+@app.get("/api/v1/calendar/holidays", tags=["Environment"])
+async def get_market_holidays(
+    month: int = Query(default=None, ge=1, le=12, description="月フィルタ"),
+):
+    """東証休場日カレンダーを返す。エージェントが取引可能日を判断するために使用。"""
+    result = calendar.get_market_holidays(month=month)
+    return _wrap_response("calendar", result)
+
+
+@app.get("/api/v1/calendar/categories", tags=["Environment"])
+async def get_calendar_categories():
+    """利用可能なカレンダーカテゴリ一覧を返す。"""
+    return _wrap_response("calendar", calendar.get_available_categories())
 
 
 # ===========================

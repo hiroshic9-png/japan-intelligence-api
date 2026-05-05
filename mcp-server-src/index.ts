@@ -623,11 +623,89 @@ server.tool(
   }
 );
 
+// ===========================
+//  環境・災害データ
+// ===========================
+
+/**
+ * japan_weather — 日本主要都市の天気予報
+ */
+server.tool(
+  "japan_weather",
+  "Get weather forecast for 8 major Japanese cities (Tokyo, Osaka, Nagoya, Fukuoka, Sapporo, Sendai, Hiroshima, Naha) with business impact assessment. Detects extreme heat, heavy rain, and cold waves that affect logistics, construction, retail, and energy sectors. No API key required.",
+  {
+    cities: z.string().optional().describe("Comma-separated city keys: tokyo,osaka,nagoya,fukuoka,sapporo,sendai,hiroshima,naha. Omit for all."),
+  },
+  async ({ cities }) => {
+    try {
+      const params: Record<string, string> = {};
+      if (cities) params.cities = cities;
+      const data = await callAPI("/api/v1/weather", params);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+/**
+ * japan_earthquakes — 日本周辺の地震データ
+ */
+server.tool(
+  "japan_earthquakes",
+  "Get recent earthquake data near Japan (lat 24-46°N, lon 122-150°E) from USGS. Returns magnitude distribution, business impact assessment by sector (insurance, construction, logistics), tsunami warnings, and seismic risk level. Essential for disaster risk evaluation. No API key required.",
+  {
+    days: z.number().min(1).max(30).default(7).describe("Period in days (default: 7)"),
+    min_magnitude: z.number().min(1).max(9).default(3.0).describe("Minimum magnitude to include (default: 3.0)"),
+  },
+  async ({ days, min_magnitude }) => {
+    try {
+      const data = await callAPI("/api/v1/earthquakes", {
+        days: String(days),
+        min_magnitude: String(min_magnitude),
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+/**
+ * economic_calendar — 日本の経済カレンダー
+ */
+server.tool(
+  "economic_calendar",
+  "Get Japan's upcoming economic events: BOJ policy meetings, Tankan survey dates, GDP releases, CPI, employment stats, earnings seasons, and TSE market holidays. Essential for anticipating market-moving events and planning analysis timing. Filter by category and importance level.",
+  {
+    days: z.number().min(1).max(365).default(30).describe("Lookahead period in days (default: 30)"),
+    category: z.string().optional().describe("Filter: monetary_policy, survey, gdp, inflation, employment, earnings, holiday"),
+    importance: z.string().optional().describe("Filter: critical, high, medium, info"),
+  },
+  async ({ days, category, importance }) => {
+    try {
+      const params: Record<string, string> = { days: String(days) };
+      if (category) params.category = category;
+      if (importance) params.importance = importance;
+      const data = await callAPI("/api/v1/calendar", params);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
 // === サーバー起動 ===
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[Japan Intelligence MCP] Server started — 20 tools available");
+  console.error("[Japan Intelligence MCP] Server started — 23 tools available");
 }
 
 main().catch((error) => {
