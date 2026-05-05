@@ -1,0 +1,4 @@
+{"ts": "2026-05-06T08:20:47.456916", "method": "GET", "path": "/api/v1/health", "status": 200, "latency_ms": 9.3, "tier": "exempt", "client": "system", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T08:20:47.518957", "method": "GET", "path": "/api/v1/telemetry/today", "status": 200, "latency_ms": 2.0, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T08:20:47.590054", "method": "POST", "path": "/api/v1/batch/tickers", "status": 200, "latency_ms": 4.9, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T08:20:47.997599", "method": "POST", "path": "/api/v1/batch/disclosures", "status": 200, "latency_ms": 343.6, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}

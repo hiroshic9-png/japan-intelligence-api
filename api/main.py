@@ -21,6 +21,8 @@ Japan Intelligence API — メインサーバー
 """
 import sys
 import os
+import json
+import time
 import traceback
 import requests
 from datetime import datetime
@@ -50,6 +52,7 @@ from sources.weather import WeatherSource
 from sources.earthquake import EarthquakeSource
 from sources.calendar import EconomicCalendarSource
 from sources.nexus import NexusSource
+from core.telemetry import TelemetryLogger
 
 # === データソース初期化 ===
 tdnet = TDnetSource()
@@ -66,6 +69,7 @@ weather = WeatherSource()
 earthquake = EarthquakeSource()
 calendar = EconomicCalendarSource()
 nexus = NexusSource()
+telemetry = TelemetryLogger()
 
 
 # === OpenAPI タグ定義 ===
@@ -179,7 +183,10 @@ _daily_store: dict[str, dict] = {}  # {client_id: {"date": str, "count": int}}
 AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json", "/api/v1/health"}
 
 
-def _get_tier_for_key(api_key: str | None) -> tuple[str, str]:
+from typing import Optional as _Optional
+
+
+def _get_tier_for_key(api_key: _Optional[str]) -> tuple:
     """APIキーからティア情報を返す。(tier_name, client_id)"""
     if api_key and api_key in _api_key_map:
         return _api_key_map[api_key], f"key:{api_key[:8]}..."
@@ -196,12 +203,22 @@ def _check_daily_limit(client_id: str, daily_limit: int) -> bool:
 
 @app.middleware("http")
 async def auth_and_rate_limit(request: Request, call_next):
-    """階層APIキー認証 + ティア別レート制限"""
+    """階層APIキー認証 + ティア別レート制限 + テレメトリ記録"""
     path = request.url.path
+    start_time = time.time()
 
     # 認証免除パス
     if path in AUTH_EXEMPT_PATHS:
-        return await call_next(request)
+        response = await call_next(request)
+        # テレメトリは免除パスでも記録（healthチェック頻度の把握）
+        latency_ms = (time.time() - start_time) * 1000
+        telemetry.record(
+            method=request.method, path=path,
+            status_code=response.status_code, latency_ms=latency_ms,
+            tier="exempt", client_id="system",
+            user_agent=request.headers.get("User-Agent"),
+        )
+        return response
 
     # APIキー取得
     api_key = (
@@ -213,6 +230,13 @@ async def auth_and_rate_limit(request: Request, call_next):
     # 認証チェック
     if _auth_enabled:
         if not api_key or api_key not in _api_key_map:
+            latency_ms = (time.time() - start_time) * 1000
+            telemetry.record(
+                method=request.method, path=path,
+                status_code=401, latency_ms=latency_ms,
+                tier="rejected", client_id="unauthenticated",
+                user_agent=request.headers.get("User-Agent"),
+            )
             return JSONResponse(
                 status_code=401,
                 content={
@@ -247,6 +271,13 @@ async def auth_and_rate_limit(request: Request, call_next):
     ]
 
     if len(_rate_store[client_id]) >= rate_limit:
+        latency_ms = (time.time() - start_time) * 1000
+        telemetry.record(
+            method=request.method, path=path,
+            status_code=429, latency_ms=latency_ms,
+            tier=tier_name, client_id=client_id,
+            user_agent=request.headers.get("User-Agent"),
+        )
         return JSONResponse(
             status_code=429,
             content={
@@ -261,6 +292,13 @@ async def auth_and_rate_limit(request: Request, call_next):
 
     # 日次制限
     if not _check_daily_limit(client_id, daily_limit):
+        latency_ms = (time.time() - start_time) * 1000
+        telemetry.record(
+            method=request.method, path=path,
+            status_code=429, latency_ms=latency_ms,
+            tier=tier_name, client_id=client_id,
+            user_agent=request.headers.get("User-Agent"),
+        )
         return JSONResponse(
             status_code=429,
             content={
@@ -277,6 +315,15 @@ async def auth_and_rate_limit(request: Request, call_next):
     _daily_store[client_id]["count"] += 1
 
     response = await call_next(request)
+
+    # テレメトリ記録
+    latency_ms = (time.time() - start_time) * 1000
+    telemetry.record(
+        method=request.method, path=path,
+        status_code=response.status_code, latency_ms=latency_ms,
+        tier=tier_name, client_id=client_id,
+        user_agent=request.headers.get("User-Agent"),
+    )
 
     # レスポンスヘッダーにティア情報を付与
     remaining_hourly = rate_limit - len(_rate_store[client_id])
@@ -390,11 +437,13 @@ async def health():
             "calendar": "available",
         },
         "capabilities": {
-            "total_endpoints": 44,
+            "total_endpoints": 48,
             "total_mcp_tools": 27,
             "data_sources": 14,
-            "authentication": bool(JI_API_KEY),
-            "rate_limit": RATE_LIMIT_PER_HOUR,
+            "authentication": _auth_enabled,
+            "tiers": list(API_TIERS.keys()),
+            "batch_api": True,
+            "telemetry": True,
             "dynamic_ticker_resolution": True,
             "cross_source_intelligence": True,
             "japan_briefing": True,
@@ -1852,6 +1901,241 @@ async def get_calendar_categories():
 #    3. 天下りエッジが100件以上に達する
 # ===========================
 # コード保持: sources/nexus.py に実装済み。条件充足後にコメント解除して公開。
+
+
+# ===========================
+#  テレメトリ/監査ログ
+# ===========================
+
+@app.get("/api/v1/telemetry/today", tags=["Reference"])
+async def get_telemetry_today():
+    """
+    本日のAPIテレメトリ統計を返す。
+
+    リクエスト総数、ティア別内訳、人気エンドポイント、
+    平均レイテンシ、エラー率を含む。
+    管理者が利用状況を把握するためのダッシュボードデータ。
+    """
+    return _wrap_response("telemetry", telemetry.get_stats())
+
+
+@app.get("/api/v1/telemetry/history", tags=["Reference"])
+async def get_telemetry_history(
+    days: int = Query(default=7, ge=1, le=30, description="過去N日分"),
+):
+    """
+    過去N日分のAPI利用履歴サマリーを返す。
+
+    日別のリクエスト数・ティア内訳・エラー数を時系列で返す。
+    トレンド分析、成長指標の把握に使用。
+    """
+    return _wrap_response("telemetry", telemetry.get_historical(days=days))
+
+
+# ===========================
+#  バッチAPI（Developer/Pro向け）
+# ===========================
+
+def _check_batch_permission(request: Request) -> tuple[bool, str, str]:
+    """バッチAPI権限チェック。(permitted, tier_name, error_message)"""
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "")
+        or request.query_params.get("api_key")
+    )
+    tier_name, _ = _get_tier_for_key(api_key)
+    tier = API_TIERS[tier_name]
+    if not tier.get("batch_enabled", False):
+        return False, tier_name, f"Batch API requires Developer or Pro tier. Current: {tier_name}"
+    return True, tier_name, ""
+
+
+@app.post("/api/v1/batch/intelligence", tags=["Intelligence"])
+async def batch_intelligence(request: Request, body: dict):
+    """
+    複数銘柄の企業インテリジェンスを一括取得する（Developer/Pro限定）。
+
+    入力:
+    ```json
+    {"tickers": ["7203", "6501", "9984"]}
+    ```
+
+    最大10銘柄まで。各銘柄について `/intelligence/{ticker}` と同等の
+    全ソース横断データを返す。1リクエストで複数企業を比較分析可能。
+    """
+    # 権限チェック
+    permitted, tier_name, error = _check_batch_permission(request)
+    if not permitted:
+        raise HTTPException(status_code=403, detail=error)
+
+    tickers = body.get("tickers", [])
+    if not tickers or not isinstance(tickers, list):
+        raise HTTPException(status_code=400, detail="'tickers' field is required (list of ticker codes)")
+
+    max_batch = 20 if tier_name == "pro" else 10
+    if len(tickers) > max_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {max_batch} tickers per batch for {tier_name} tier. Got {len(tickers)}",
+        )
+
+    results = []
+    for ticker in tickers:
+        try:
+            normalized = _normalize_ticker(ticker)
+            company_name = resolve_name(normalized)
+
+            entry = {
+                "ticker": normalized,
+                "company_name": company_name,
+            }
+
+            # J-Quants財務
+            try:
+                financials = jquants.get_financial_statements(ticker)
+                if financials:
+                    latest = financials[0]
+                    entry["financials"] = {
+                        "net_sales": latest.get("net_sales"),
+                        "operating_profit": latest.get("operating_profit"),
+                        "net_income": latest.get("net_income"),
+                        "eps": latest.get("eps"),
+                        "equity_ratio": latest.get("equity_ratio"),
+                        "forecast_eps": latest.get("forecast_eps"),
+                    }
+            except Exception:
+                entry["financials"] = None
+
+            # TDnet直近開示
+            try:
+                disclosures = tdnet.get_disclosures(days=7)
+                code = normalized.replace(".T", "")
+                company_disc = [
+                    {"title": d["title"][:60], "impact": d.get("impact", ""), "category": d.get("category", "")}
+                    for d in disclosures
+                    if d.get("ticker", "").replace(".T", "") == code
+                ]
+                entry["disclosures"] = company_disc[:5]
+            except Exception:
+                entry["disclosures"] = []
+
+            # EDINET大量保有
+            try:
+                holdings = edinet.get_holdings(days=30)
+                code = normalized.replace(".T", "")
+                entry["recent_holdings"] = [
+                    {"filer": h.get("filer_name", ""), "date": h.get("date", "")}
+                    for h in holdings if h.get("code", "") == code
+                ][:3]
+            except Exception:
+                entry["recent_holdings"] = []
+
+            results.append(entry)
+
+        except Exception as e:
+            results.append({"ticker": ticker, "error": str(e)})
+
+    return _wrap_response("batch_intelligence", {
+        "requested": len(tickers),
+        "returned": len(results),
+        "tier": tier_name,
+        "results": results,
+    })
+
+
+@app.post("/api/v1/batch/disclosures", tags=["Disclosures"])
+async def batch_disclosures(request: Request, body: dict):
+    """
+    複数銘柄の適時開示を一括取得する（Developer/Pro限定）。
+
+    入力:
+    ```json
+    {"tickers": ["7203", "6501", "9984"], "days": 7}
+    ```
+
+    最大20銘柄まで。ポートフォリオ全体の開示モニタリングに最適。
+    """
+    permitted, tier_name, error = _check_batch_permission(request)
+    if not permitted:
+        raise HTTPException(status_code=403, detail=error)
+
+    tickers = body.get("tickers", [])
+    days = body.get("days", 7)
+    if not tickers or not isinstance(tickers, list):
+        raise HTTPException(status_code=400, detail="'tickers' field is required")
+
+    max_batch = 30 if tier_name == "pro" else 20
+    if len(tickers) > max_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {max_batch} tickers per batch for {tier_name} tier",
+        )
+
+    all_disclosures = tdnet.get_disclosures(days=min(days, 30))
+    results = {}
+    for ticker in tickers:
+        normalized = _normalize_ticker(ticker)
+        code = normalized.replace(".T", "")
+        matched = [
+            {
+                "title": d["title"][:80],
+                "category": d.get("category", ""),
+                "impact": d.get("impact", ""),
+                "date": d.get("date", ""),
+                "company_name": resolve_name(normalized),
+            }
+            for d in all_disclosures
+            if d.get("ticker", "").replace(".T", "") == code
+        ]
+        results[normalized] = matched
+
+    return _wrap_response("batch_disclosures", {
+        "requested": len(tickers),
+        "period_days": days,
+        "tier": tier_name,
+        "results": results,
+    })
+
+
+@app.post("/api/v1/batch/tickers", tags=["Reference"])
+async def batch_ticker_resolve(request: Request, body: dict):
+    """
+    複数銘柄コードの会社名を一括解決する（Developer/Pro限定）。
+
+    入力:
+    ```json
+    {"tickers": ["7203", "6501", "9984", "4502", "8306"]}
+    ```
+
+    最大50銘柄まで。ポートフォリオ管理、レポート生成に便利。
+    """
+    permitted, tier_name, error = _check_batch_permission(request)
+    if not permitted:
+        raise HTTPException(status_code=403, detail=error)
+
+    tickers = body.get("tickers", [])
+    if not tickers or not isinstance(tickers, list):
+        raise HTTPException(status_code=400, detail="'tickers' field is required")
+
+    max_batch = 100 if tier_name == "pro" else 50
+    if len(tickers) > max_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Max {max_batch} tickers per batch for {tier_name} tier",
+        )
+
+    results = []
+    for ticker in tickers:
+        normalized = _normalize_ticker(ticker)
+        results.append({
+            "ticker": normalized,
+            "company_name": resolve_name(normalized),
+        })
+
+    return _wrap_response("batch_tickers", {
+        "requested": len(tickers),
+        "results": results,
+    })
 
 
 # ===========================
