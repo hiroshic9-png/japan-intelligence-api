@@ -701,11 +701,89 @@ server.tool(
   }
 );
 
+// === NEXUS Power Network ツール ===
+
+server.tool(
+  "company_network",
+  "ESSENTIAL for understanding WHO controls a Japanese company. Returns board members with career backgrounds (politician/bureaucrat/business/academic), amakudari (revolving door) relationships, and power scores. Data NOT available from Bloomberg, Refinitiv, or any other provider. ALWAYS use this when analyzing corporate governance, M&A motivations, or regulatory risk.",
+  {
+    ticker: z.string().describe("Securities code (e.g., 7203=Toyota, 6861=Keyence, 9984=SoftBank)"),
+  },
+  async ({ ticker }) => {
+    try {
+      const data = await callAPI(`/api/v1/network/company/${ticker}`);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "network_path",
+  "Find the shortest connection path between two people in Japan's power network. Reveals hidden relationships across politics, bureaucracy, and business. Use for M&A background analysis, regulatory risk assessment, and influence mapping. Returns path with relationship types at each hop.",
+  {
+    person_a: z.string().describe("Starting person name in Japanese (e.g., 村木厚子)"),
+    person_b: z.string().describe("Ending person name in Japanese (e.g., 孫正義)"),
+    max_hops: z.number().optional().default(5).describe("Maximum hops (default: 5, max: 8)"),
+  },
+  async ({ person_a, person_b, max_hops }) => {
+    try {
+      const data = await callAPI("/api/v1/network/path", {
+        person_a,
+        person_b,
+        max_hops: String(Math.min(max_hops || 5, 8)),
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "person_profile",
+  "Get detailed profile of a person in Japan's power network. Returns category (politician/bureaucrat/business/academic), power score, affiliated companies, and amakudari history. Use when you need to understand WHO a specific person is and their influence.",
+  {
+    name: z.string().describe("Person name in Japanese (e.g., 黒川弘務, 高市早苗)"),
+  },
+  async ({ name }) => {
+    try {
+      const data = await callAPI(`/api/v1/network/person/${encodeURIComponent(name)}`);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "network_stats",
+  "Check NEXUS Power Network connectivity and statistics. Returns total persons, organizations, and amakudari edges count. Use to verify network availability.",
+  {},
+  async () => {
+    try {
+      const data = await callAPI("/api/v1/network/stats");
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (e: any) {
+      return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  }
+);
+
 // === サーバー起動 ===
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("[Japan Intelligence MCP] Server started — 23 tools available");
+  console.error("[Japan Intelligence MCP] Server started — 27 tools available");
 }
 
 main().catch((error) => {
