@@ -115,74 +115,174 @@ app.add_middleware(CacheControlMiddleware)
 
 # === API認証 & レート制限 ===
 
-# APIキー認証（JI_API_KEY環境変数が設定されている場合のみ有効化）
+# =====================================================================
+# 階層APIキー認証 + レート制限（Free / Developer / Pro）
+# =====================================================================
+#
+# 設定方法:
+#   1. 単一キー（後方互換）: JI_API_KEY=mysecretkey
+#   2. 階層キー（推奨）: JI_API_KEYS を JSON で設定
+#      JI_API_KEYS={"free-demo-key": "free", "dev-abc123": "developer", "pro-xyz789": "pro"}
+#
+# 未認証（キーなし）アクセスはFreeティアとして扱う（JI_API_KEY未設定時のみ）
+# =====================================================================
+
+# ティア定義
+API_TIERS = {
+    "free": {
+        "rate_limit_per_hour": 30,
+        "daily_limit": 200,
+        "allowed_endpoints": "all",  # 全エンドポイントアクセス可能
+        "batch_enabled": False,
+        "priority": "standard",
+    },
+    "developer": {
+        "rate_limit_per_hour": 300,
+        "daily_limit": 5000,
+        "allowed_endpoints": "all",
+        "batch_enabled": True,
+        "priority": "elevated",
+    },
+    "pro": {
+        "rate_limit_per_hour": 3000,
+        "daily_limit": 50000,
+        "allowed_endpoints": "all",
+        "batch_enabled": True,
+        "priority": "highest",
+    },
+}
+
+# APIキー → ティアのマッピングを構築
+_api_key_map: dict[str, str] = {}  # {api_key: tier_name}
+
+# 階層キー設定（推奨）
+_api_keys_json = os.getenv("JI_API_KEYS", "")
+if _api_keys_json:
+    try:
+        _api_key_map = json.loads(_api_keys_json)
+    except json.JSONDecodeError:
+        print("[AUTH] WARNING: JI_API_KEYS is not valid JSON, ignoring")
+
+# 単一キー設定（後方互換）— Proとして扱う
 JI_API_KEY = os.getenv("JI_API_KEY", "")
-RATE_LIMIT_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "100"))
+if JI_API_KEY and JI_API_KEY not in _api_key_map:
+    _api_key_map[JI_API_KEY] = "pro"
+
+_auth_enabled = bool(_api_key_map)
 _rate_store: dict[str, list] = {}  # {client_id: [timestamps]}
+_daily_store: dict[str, dict] = {}  # {client_id: {"date": str, "count": int}}
 
 # 認証免除パス
 AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json", "/api/v1/health"}
 
 
+def _get_tier_for_key(api_key: str | None) -> tuple[str, str]:
+    """APIキーからティア情報を返す。(tier_name, client_id)"""
+    if api_key and api_key in _api_key_map:
+        return _api_key_map[api_key], f"key:{api_key[:8]}..."
+    return "free", "anonymous"
+
+
+def _check_daily_limit(client_id: str, daily_limit: int) -> bool:
+    """日次制限チェック。制限内ならTrue。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    if client_id not in _daily_store or _daily_store[client_id]["date"] != today:
+        _daily_store[client_id] = {"date": today, "count": 0}
+    return _daily_store[client_id]["count"] < daily_limit
+
+
 @app.middleware("http")
 async def auth_and_rate_limit(request: Request, call_next):
-    """APIキー認証 + 毎時レート制限"""
+    """階層APIキー認証 + ティア別レート制限"""
     path = request.url.path
 
     # 認証免除パス
     if path in AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
-    # APIキー認証（設定されている場合のみ）
-    if JI_API_KEY:
-        api_key = (
-            request.headers.get("X-API-Key")
-            or request.headers.get("Authorization", "").replace("Bearer ", "")
-            or request.query_params.get("api_key")
-        )
-        if api_key != JI_API_KEY:
+    # APIキー取得
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "")
+        or request.query_params.get("api_key")
+    )
+
+    # 認証チェック
+    if _auth_enabled:
+        if not api_key or api_key not in _api_key_map:
             return JSONResponse(
                 status_code=401,
                 content={
                     "status": "error",
                     "error": "Invalid or missing API key",
-                    "detail": "Set X-API-Key header or api_key query parameter",
+                    "detail": "Set X-API-Key header or api_key query parameter. Get your key at https://transcode.sh",
+                    "tiers": {name: {"rate_limit_per_hour": t["rate_limit_per_hour"], "daily_limit": t["daily_limit"]} for name, t in API_TIERS.items()},
                     "timestamp": datetime.now().isoformat(),
                 },
             )
 
-    # レート制限（IPベース）
-    client_ip = request.client.host if request.client else "unknown"
-    client_id = api_key if JI_API_KEY and api_key else client_ip  # type: ignore
+    # ティア判定
+    tier_name, client_id = _get_tier_for_key(api_key)
+    tier = API_TIERS[tier_name]
+    rate_limit = tier["rate_limit_per_hour"]
+    daily_limit = tier["daily_limit"]
+
+    # IPフォールバック（キーなし時）
+    if client_id == "anonymous":
+        client_ip = request.client.host if request.client else "unknown"
+        client_id = f"ip:{client_ip}"
+
     now = datetime.now()
 
+    # 毎時レート制限
     if client_id not in _rate_store:
         _rate_store[client_id] = []
 
-    # 1時間以内のリクエストのみ保持
     _rate_store[client_id] = [
         t for t in _rate_store[client_id]
         if (now - t).total_seconds() < 3600
     ]
 
-    if len(_rate_store[client_id]) >= RATE_LIMIT_PER_HOUR:
+    if len(_rate_store[client_id]) >= rate_limit:
         return JSONResponse(
             status_code=429,
             content={
                 "status": "error",
                 "error": "Rate limit exceeded",
-                "detail": f"Max {RATE_LIMIT_PER_HOUR} requests per hour",
+                "detail": f"Max {rate_limit} requests/hour for {tier_name} tier",
+                "tier": tier_name,
+                "upgrade": "Contact hello@transcode.sh to upgrade your tier",
+                "timestamp": now.isoformat(),
+            },
+        )
+
+    # 日次制限
+    if not _check_daily_limit(client_id, daily_limit):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "error": "Daily limit exceeded",
+                "detail": f"Max {daily_limit} requests/day for {tier_name} tier",
+                "tier": tier_name,
+                "upgrade": "Contact hello@transcode.sh to upgrade your tier",
                 "timestamp": now.isoformat(),
             },
         )
 
     _rate_store[client_id].append(now)
+    _daily_store[client_id]["count"] += 1
+
     response = await call_next(request)
 
-    # レート制限ヘッダー
-    remaining = RATE_LIMIT_PER_HOUR - len(_rate_store[client_id])
-    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_PER_HOUR)
-    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    # レスポンスヘッダーにティア情報を付与
+    remaining_hourly = rate_limit - len(_rate_store[client_id])
+    remaining_daily = daily_limit - _daily_store[client_id]["count"]
+    response.headers["X-RateLimit-Limit"] = str(rate_limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining_hourly)
+    response.headers["X-RateLimit-Daily-Limit"] = str(daily_limit)
+    response.headers["X-RateLimit-Daily-Remaining"] = str(remaining_daily)
+    response.headers["X-API-Tier"] = tier_name
 
     return response
 
