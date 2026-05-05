@@ -81,7 +81,7 @@ TAGS = [
     {"name": "Macro", "description": "マクロ指標 — 原油・金・ドル円・VIX・日経・S&P500の異常変動検知"},
     {"name": "Intelligence", "description": "AI解釈エンジン（Layer 2）— 構造化データへの意味付けと投資示唆"},
     {"name": "Environment", "description": "環境・災害データ — 天気予報（Open-Meteo/JMA）・地震（USGS）・経済カレンダー"},
-    {"name": "Network", "description": "NEXUS人物ネットワーク — 企業役員の経歴・天下り関係・パスファインディング"},
+    # {"name": "Network", "description": "NEXUS人物ネットワーク — 企業役員の経歴・天下り関係・パスファインディング"},  # 非公開: パスファインダー品質改善 + ネットワーク到達性解決後に再公開
     {"name": "Reference", "description": "銘柄情報・ヘルスチェック等のユーティリティ"},
 ]
 
@@ -1845,89 +1845,13 @@ async def get_calendar_categories():
 
 
 # ===========================
-#  NEXUS パワーネットワーク
+#  NEXUS パワーネットワーク（非公開）
+#  再公開条件:
+#    1. パスファインダーに関係強度フィルタが実装される
+#    2. Render→Neo4jの安全なリモートアクセスが確立される
+#    3. 天下りエッジが100件以上に達する
 # ===========================
-
-@app.get("/api/v1/network/company/{ticker}", tags=["Network"])
-async def get_company_network(ticker: str):
-    """
-    企業の役員ネットワークを取得。NEXUS Power Networkから取締役・監査役の
-    経歴カテゴリ（政治家/官僚/経営者/学者）、天下り関係、パワースコアを返す。
-
-    **他のどのデータAPIにも存在しない独自データ。**
-    Bloomberg/Refinitivにもない「人を通じた企業理解」を提供。
-
-    - **ticker**: 証券コード（例: 7203=トヨタ, 6861=キーエンス）
-    """
-    # EDINETマッピングからticker→企業名を解決
-    company_name = None
-    edinet_map_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "edinet_code_map.json")
-    if os.path.exists(edinet_map_path):
-        with open(edinet_map_path) as f:
-            edinet_map = json.load(f)
-        for code, info in edinet_map.items():
-            if isinstance(info, dict) and info.get("sec_code", "").startswith(ticker):
-                company_name = info.get("name", "")
-                break
-
-    if not company_name:
-        # フォールバック: tickerをそのまま検索
-        company_name = ticker
-
-    try:
-        data = nexus.get_company_network(company_name)
-        return _wrap_response("nexus_network", data)
-    except Exception as e:
-        return _wrap_response("nexus_network", {
-            "error": f"NEXUS connection unavailable: {str(e)}",
-            "detail": "NEXUS Power Network requires local Neo4j connectivity",
-        })
-
-
-@app.get("/api/v1/network/path", tags=["Network"])
-async def find_network_path(person_a: str, person_b: str, max_hops: int = 5):
-    """
-    2人の人物間の最短パスを検索。政治家→官僚→経営者等のセクター横断的な
-    接続ルートを発見する。
-
-    **ユースケース**: M&Aの裏にある人脈の発見、規制リスクの経路分析。
-
-    - **person_a**: 起点の人物名（日本語）
-    - **person_b**: 終点の人物名（日本語）
-    - **max_hops**: 最大ホップ数（デフォルト: 5）
-    """
-    if max_hops > 8:
-        max_hops = 8  # パフォーマンス保護
-    try:
-        data = nexus.find_path(person_a, person_b, max_hops)
-        return _wrap_response("nexus_path", data)
-    except Exception as e:
-        return _wrap_response("nexus_path", {"error": str(e)})
-
-
-@app.get("/api/v1/network/person/{name}", tags=["Network"])
-async def get_person_profile(name: str):
-    """
-    人物の詳細プロフィールを取得。所属企業、天下り経歴、パワースコア、
-    カテゴリ（政治家/官僚/経営者/学者/文化）を返す。
-
-    - **name**: 人物名（日本語、例: 村木厚子）
-    """
-    try:
-        data = nexus.get_person(name)
-        return _wrap_response("nexus_person", data)
-    except Exception as e:
-        return _wrap_response("nexus_person", {"error": str(e)})
-
-
-@app.get("/api/v1/network/stats", tags=["Network"])
-async def get_network_stats():
-    """NEXUSパワーネットワークの統計情報（接続状態確認）"""
-    try:
-        data = nexus.get_stats()
-        return _wrap_response("nexus_stats", data)
-    except Exception as e:
-        return _wrap_response("nexus_stats", {"status": "disconnected", "error": str(e)})
+# コード保持: sources/nexus.py に実装済み。条件充足後にコメント解除して公開。
 
 
 # ===========================
