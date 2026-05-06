@@ -1,0 +1,6 @@
+{"timestamp": "2026-05-06T10:56:33.276443", "name": "Test User", "email": "test@example.com", "use_case": "testing", "key_prefix": "ji_free_VnZH...", "tier": "free"}
+{"timestamp": "2026-05-06T10:56:33.334803", "name": "Test2", "email": "t2@ex.com", "use_case": "", "key_prefix": "ji_free_veSk...", "tier": "free"}
+{"timestamp": "2026-05-06T10:57:30.117578", "name": "Test User", "email": "test@example.com", "use_case": "", "key_prefix": "ji_free_oKRs...", "tier": "free"}
+{"timestamp": "2026-05-06T10:59:04.539633", "name": "Test User", "email": "test@example.com", "use_case": "MCP agent", "key_prefix": "ji_free_YbBV...", "tier": "free"}
+{"timestamp": "2026-05-06T10:59:04.623547", "name": "Agent", "email": "a@b.com", "use_case": "", "key_prefix": "ji_free_w-mg...", "tier": "free"}
+{"timestamp": "2026-05-06T11:00:36.597901", "name": "Test", "email": "t@e.com", "use_case": "", "key_prefix": "ji_free_hamy...", "tier": "free"}

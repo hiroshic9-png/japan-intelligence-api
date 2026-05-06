@@ -182,7 +182,7 @@ _rate_store: dict[str, list] = {}  # {client_id: [timestamps]}
 _daily_store: dict[str, dict] = {}  # {client_id: {"date": str, "count": int}}
 
 # 認証免除パス
-AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json", "/api/v1/health"}
+AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json", "/api/v1/health", "/api/v1/keys/register"}
 
 
 from typing import Optional as _Optional
@@ -410,6 +410,86 @@ def _normalize_ticker(ticker: str) -> str:
     if not ticker.endswith('.T'):
         return f"{ticker}.T"
     return ticker
+
+
+# ===========================
+#  APIキー自動発行
+# ===========================
+import secrets as _secrets
+
+_KEYS_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "keys"
+)
+os.makedirs(_KEYS_LOG_PATH, exist_ok=True)
+
+
+@app.post("/api/v1/keys/register", tags=["Reference"])
+async def register_api_key(request: Request):
+    """
+    Freeティア APIキーのセルフサービス発行。
+
+    認証不要。名前とメールアドレスを送信するだけで
+    即座にFreeキーが発行され、すぐにAPIを利用開始できる。
+
+    ```json
+    {"name": "Your Name", "email": "you@example.com", "use_case": "MCP agent for Japan market analysis"}
+    ```
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    name = body.get("name", "").strip()
+    email = body.get("email", "").strip()
+    use_case = body.get("use_case", "").strip()
+
+    if not name or not email:
+        return JSONResponse(status_code=400, content={
+            "error": "name and email are required",
+            "example": {"name": "Taro Yamada", "email": "taro@example.com", "use_case": "optional"}
+        })
+
+    if "@" not in email:
+        return JSONResponse(status_code=400, content={"error": "Invalid email format"})
+
+    # キー生成
+    key = f"ji_free_{_secrets.token_urlsafe(24)}"
+
+    # 動的にキーマップに追加（即有効化）
+    _api_key_map[key] = "free"
+
+    # 発行ログ記録
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "name": name,
+        "email": email,
+        "use_case": use_case,
+        "key_prefix": key[:12] + "...",
+        "tier": "free",
+    }
+    try:
+        log_file = os.path.join(_KEYS_LOG_PATH, "issued_keys.jsonl")
+        with open(log_file, "a") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "api_key": key,
+        "tier": "free",
+        "rate_limit": {
+            "hourly": API_TIERS["free"]["rate_limit_per_hour"],
+            "daily": API_TIERS["free"]["daily_limit"],
+        },
+        "usage": {
+            "header": "X-API-Key: " + key,
+            "example": f"curl -H 'X-API-Key: {key}' https://japan-intelligence-api.onrender.com/api/v1/briefing",
+        },
+        "docs": "https://japan-intelligence-api.onrender.com/docs",
+        "note": "Key is active immediately. Upgrade to Developer/Pro: h.sato@c-9.co.jp",
+    }
 
 
 # ===========================
