@@ -48,6 +48,7 @@ from sources.fred import FredSource
 from sources.boj import BOJSource
 from sources.jpx_investor import JPXInvestorFlowSource
 from intelligence.interpreter import Interpreter
+from intelligence.summarizer import DisclosureSummarizer
 from sources.weather import WeatherSource
 from sources.earthquake import EarthquakeSource
 from sources.calendar import EconomicCalendarSource
@@ -70,6 +71,7 @@ earthquake = EarthquakeSource()
 calendar = EconomicCalendarSource()
 nexus = NexusSource()
 telemetry = TelemetryLogger()
+summarizer = DisclosureSummarizer()
 
 
 # === OpenAPI タグ定義 ===
@@ -437,7 +439,7 @@ async def health():
             "calendar": "available",
         },
         "capabilities": {
-            "total_endpoints": 48,
+            "total_endpoints": 49,
             "total_mcp_tools": 27,
             "data_sources": 14,
             "authentication": _auth_enabled,
@@ -562,6 +564,50 @@ async def get_disclosure_stats(
         ),
         "notable_disclosures": notable[:20],
     })
+
+
+@app.get("/api/v1/disclosures/summarized", tags=["Intelligence"])
+async def get_summarized_disclosures(
+    days: int = Query(default=1, ge=1, le=7, description="取得期間（日数）"),
+    category: str = Query(default=None, description="カテゴリフィルタ"),
+    min_impact: int = Query(default=0, ge=0, le=5, description="最小インパクトスコア（1-5）"),
+    offset: int = Query(default=0, ge=0, description="ページネーション開始位置"),
+    limit: int = Query(default=30, ge=1, le=100, description="取得件数上限"),
+):
+    """
+    AI要約付き適時開示 — TRANSCODE排他的データ層。
+
+    TDnetの日本語開示タイトルをGeminiで英語1行要約に変換。
+    各開示に以下を付与:
+    - `summary_en`: 英語1行要約（15語以内）
+    - `impact_score`: 重要度スコア（1-5）
+    - `sector_relevance`: 影響セクター
+
+    生データではなく、AIが解釈した「意味」を返す点が
+    通常のdisclosuresエンドポイントとの差別化要素。
+    """
+    disclosures = tdnet.get_disclosures(days=days)
+
+    # 会社名付与
+    for d in disclosures:
+        if not d.get('company_name'):
+            d['company_name'] = resolve_name(d['ticker'])
+
+    # カテゴリフィルタ
+    if category:
+        disclosures = [d for d in disclosures if d['category'] == category]
+
+    # AI要約生成（バッチ）
+    disclosures = summarizer.summarize_batch(disclosures, max_items=50)
+
+    # インパクトスコアフィルタ
+    if min_impact > 0:
+        disclosures = [
+            d for d in disclosures
+            if d.get('ai_summary', {}).get('impact_score', 0) >= min_impact
+        ]
+
+    return _wrap_response("tdnet_summarized", disclosures, offset=offset, limit=limit)
 
 
 @app.get("/api/v1/disclosures/{ticker}", tags=["Disclosures"])

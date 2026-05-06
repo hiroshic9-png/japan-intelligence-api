@@ -2,3 +2,9 @@
 {"ts": "2026-05-06T08:20:47.518957", "method": "GET", "path": "/api/v1/telemetry/today", "status": 200, "latency_ms": 2.0, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
 {"ts": "2026-05-06T08:20:47.590054", "method": "POST", "path": "/api/v1/batch/tickers", "status": 200, "latency_ms": 4.9, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
 {"ts": "2026-05-06T08:20:47.997599", "method": "POST", "path": "/api/v1/batch/disclosures", "status": 200, "latency_ms": 343.6, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:17:22.845871", "method": "GET", "path": "/api/v1/disclosures/summarized", "status": 200, "latency_ms": 513.5, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:17:46.395396", "method": "GET", "path": "/api/v1/disclosures/summarized", "status": 200, "latency_ms": 2.1, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:19:52.325926", "method": "GET", "path": "/api/v1/disclosures/summarized", "status": 200, "latency_ms": 359.4, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:20:16.138929", "method": "GET", "path": "/api/v1/disclosures/summarized", "status": 200, "latency_ms": 266.8, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:20:37.199222", "method": "GET", "path": "/api/v1/disclosures", "status": 200, "latency_ms": 261.0, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
+{"ts": "2026-05-06T09:22:15.217144", "method": "GET", "path": "/api/v1/disclosures/summarized", "status": 200, "latency_ms": 73199.9, "tier": "pro", "client": "key:ji_PsbSl...", "ua": "curl/8.7.1"}
