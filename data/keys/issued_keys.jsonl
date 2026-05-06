@@ -4,3 +4,4 @@
 {"timestamp": "2026-05-06T10:59:04.539633", "name": "Test User", "email": "test@example.com", "use_case": "MCP agent", "key_prefix": "ji_free_YbBV...", "tier": "free"}
 {"timestamp": "2026-05-06T10:59:04.623547", "name": "Agent", "email": "a@b.com", "use_case": "", "key_prefix": "ji_free_w-mg...", "tier": "free"}
 {"timestamp": "2026-05-06T11:00:36.597901", "name": "Test", "email": "t@e.com", "use_case": "", "key_prefix": "ji_free_hamy...", "tier": "free"}
+{"timestamp": "2026-05-06T12:41:19.499392", "name": "Test", "email": "test@persist.com", "use_case": "", "api_key": "ji_free_E27WvO-81-zXKFmlisNyNwZZIl0hi1pw", "key_prefix": "ji_free_E27W...", "tier": "free"}

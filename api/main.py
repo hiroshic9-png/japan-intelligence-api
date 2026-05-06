@@ -413,14 +413,43 @@ def _normalize_ticker(ticker: str) -> str:
 
 
 # ===========================
-#  APIキー自動発行
+#  APIキー自動発行（永続化対応）
 # ===========================
 import secrets as _secrets
 
-_KEYS_LOG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "keys"
-)
+# 永続ディスクがあればそちらを使う（Render Persistent Disk）
+_PERSISTENT_DATA_PATH = os.getenv("PERSISTENT_DATA_PATH", "/var/data")
+if os.path.isdir(_PERSISTENT_DATA_PATH):
+    _KEYS_LOG_PATH = os.path.join(_PERSISTENT_DATA_PATH, "keys")
+else:
+    _KEYS_LOG_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "data", "keys"
+    )
 os.makedirs(_KEYS_LOG_PATH, exist_ok=True)
+_KEYS_FILE = os.path.join(_KEYS_LOG_PATH, "issued_keys.jsonl")
+
+# --- 起動時: ファイルから発行済みキーを復元 ---
+_restored_count = 0
+if os.path.exists(_KEYS_FILE):
+    try:
+        with open(_KEYS_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    key = entry.get("api_key", "")
+                    tier = entry.get("tier", "free")
+                    if key and key not in _api_key_map:
+                        _api_key_map[key] = tier
+                        _restored_count += 1
+                except json.JSONDecodeError:
+                    continue
+        if _restored_count > 0:
+            print(f"[KEYS] Restored {_restored_count} issued keys from {_KEYS_FILE}")
+    except Exception as e:
+        print(f"[KEYS] Failed to restore keys: {e}")
 
 
 @app.post("/api/v1/keys/register", tags=["Reference"])
@@ -453,24 +482,53 @@ async def register_api_key(request: Request):
     if "@" not in email:
         return JSONResponse(status_code=400, content={"error": "Invalid email format"})
 
+    # 同一メールの重複発行チェック（スパム防止）
+    existing_key = None
+    try:
+        if os.path.exists(_KEYS_FILE):
+            with open(_KEYS_FILE, "r") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        if entry.get("email") == email:
+                            existing_key = entry.get("api_key", "")
+                            break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    if existing_key:
+        return {
+            "status": "ok",
+            "api_key": existing_key,
+            "tier": "free",
+            "note": "Key already issued for this email. Returning existing key.",
+            "rate_limit": {
+                "hourly": API_TIERS["free"]["rate_limit_per_hour"],
+                "daily": API_TIERS["free"]["daily_limit"],
+            },
+            "docs": "https://japan-intelligence-api.onrender.com/docs",
+        }
+
     # キー生成
     key = f"ji_free_{_secrets.token_urlsafe(24)}"
 
     # 動的にキーマップに追加（即有効化）
     _api_key_map[key] = "free"
 
-    # 発行ログ記録
+    # 発行ログ記録（キー本体を含めて永続化可能にする）
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "name": name,
         "email": email,
         "use_case": use_case,
+        "api_key": key,
         "key_prefix": key[:12] + "...",
         "tier": "free",
     }
     try:
-        log_file = os.path.join(_KEYS_LOG_PATH, "issued_keys.jsonl")
-        with open(log_file, "a") as f:
+        with open(_KEYS_FILE, "a") as f:
             f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
@@ -490,6 +548,7 @@ async def register_api_key(request: Request):
         "docs": "https://japan-intelligence-api.onrender.com/docs",
         "note": "Key is active immediately. Upgrade to Developer/Pro: h.sato@c-9.co.jp",
     }
+
 
 
 # ===========================
