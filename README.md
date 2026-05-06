@@ -2,7 +2,7 @@
 
 **AIエージェントのための日本市場インテリジェンス基盤**
 
-Japan Intelligence は、日本の公開情報を構造化し、AIエージェントが即座に利用可能な形式で提供するAPIプラットフォームです。**14のデータソース**を横断統合し、企業分析・マクロ経済・金融政策・環境災害を**44エンドポイント + 27 MCPツール**で完結させます。
+Japan Intelligence は、日本の公開情報を構造化し、AIエージェントが即座に利用可能な形式で提供するAPIプラットフォームです。**14のデータソース**を横断統合し、企業分析・マクロ経済・金融政策・環境災害を**49エンドポイント + 27 MCPツール**で完結させます。
 
 > 🎯 **1つのAPIキーで日本の全て** — 適時開示、機関投資家の持分変動、500万法人のデータベース、政府統計10系列、株価ヒストリカル、日銀短観、投資部門別売買動向、日米金融政策、天気予報、地震データ、経済カレンダー、AI解釈を統合提供
 
@@ -213,6 +213,99 @@ Rate limit: **100 requests/hour** per API key (X-RateLimit-Limit/Remaining heade
 }
 ```
 
+## Framework Integration (LangChain / CrewAI)
+
+### LangChain
+
+```python
+from integrations.transcode_langchain import get_transcode_tools
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+tools = get_transcode_tools(api_key="your-api-key")
+llm = ChatOpenAI(model="gpt-4o")
+agent = create_react_agent(llm, tools)
+
+result = agent.invoke({
+    "messages": [("user", "What's happening in Japanese markets today?")]
+})
+```
+
+11 tools: `japan_briefing`, `company_intelligence`, `market_snapshot`, `disclosures`, `ai_summarized_disclosures`, `holdings`, `investor_flows`, `macro_events`, `tankan_summary`, `economic_calendar`, `batch_intelligence`
+
+### CrewAI
+
+```python
+from integrations.transcode_crewai import TranscodeTools
+from crewai import Agent, Task, Crew
+
+tools = TranscodeTools(api_key="your-api-key")
+
+analyst = Agent(
+    role="Japan Market Analyst",
+    goal="Analyze Japanese market conditions and identify opportunities",
+    tools=tools.all(),  # 9 tools, or tools.core() for 4 essentials
+)
+
+task = Task(
+    description="Create a morning briefing on Japanese markets",
+    expected_output="Structured market report with key takeaways",
+    agent=analyst,
+)
+
+crew = Crew(agents=[analyst], tasks=[task])
+result = crew.kickoff()
+```
+
+### Standalone (No Framework)
+
+```python
+from integrations.transcode_langchain import TranscodeClient
+
+client = TranscodeClient(api_key="your-api-key")
+briefing = client.briefing()
+intel = client.intelligence("7203")  # Toyota
+```
+
+## Batch API (Developer/Pro)
+
+```bash
+# Multi-ticker intelligence
+POST /api/v1/batch/intelligence   {"tickers": ["7203", "6501", "9984"]}
+
+# Multi-ticker disclosures
+POST /api/v1/batch/disclosures    {"tickers": ["7203", "6501"], "days": 3}
+
+# Bulk ticker resolution
+POST /api/v1/batch/tickers        {"tickers": ["7203", "6501", "9984"]}
+```
+
+## AI-Summarized Disclosures (Exclusive)
+
+```bash
+# English AI summaries + impact scoring for all disclosures
+GET /api/v1/disclosures/summarized?days=3&min_impact=3
+```
+
+Returns:
+```json
+{
+  "ai_summary": {
+    "summary_en": "Share buyback announced by Toyota, signals undervaluation view",
+    "impact_score": 4,
+    "sector_relevance": "Automotive, Manufacturing",
+    "source": "gemini"
+  }
+}
+```
+
+## Telemetry
+
+```bash
+GET /api/v1/telemetry/today       # Today's API usage stats
+GET /api/v1/telemetry/history     # Historical usage (7 days default)
+```
+
 ## Quick Start
 
 ```bash
@@ -244,7 +337,7 @@ python -m api.main
 | `JQUANTS_API_KEY` | Yes | J-Quants v2 API key |
 | `FRED_API_KEY` | Yes | FRED API key |
 | `JI_API_KEY` | Optional | API authentication key (enables auth when set) |
-| `RATE_LIMIT_PER_HOUR` | Optional | Rate limit (default: 100) |
+| `JI_API_KEYS` | Optional | Multi-tier keys: `{"key": "tier"}` |
 
 ## API Documentation
 
@@ -255,3 +348,4 @@ Interactive documentation:
 ## License
 
 Proprietary. All rights reserved.
+
